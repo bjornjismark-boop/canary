@@ -87,17 +87,34 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 
 ### Leverabler
 
-- [ ] gångbarhetsbedömning
-- [ ] åtta riktningar
+- [x] M2A gångbarhetsbedömning med normaliserade värderesultat
+- [x] M2A åtta riktningar och lokala positionsdelta
 - [ ] lokal pathfinding
-- [ ] diagonal kostnad
-- [ ] riskkostnad för fields och threats
-- [ ] upptagna tiles
+- [x] M2A deterministisk diagonal kostnad enligt Canarys kostnadsskala
+- [x] M2A riskkostnad för skadliga fields
+- [x] M2A synliga blockerande creatures på upptagna tiles
 - [ ] repath
 - [ ] stuck detection
 - [ ] stängda dörrar och use-interaction
 - [ ] enkel trappa/stege/teleport-transition
 - [ ] transitions verifieras genom observerat resultat
+
+### M2A evidens — local walkability contract
+
+- [x] värdebaserade observationer och resultat utan långlivade tile-, item- eller creature-referenser;
+- [x] statiska terrain/item-blockers, dynamisk synlig occupancy och skadliga fields klassificeras genom verklig tile-state;
+- [x] samma våning krävs och action-time revalidation körs före exakt destinationsrörelse genom `Tile::queryAdd`;
+- [x] diagonal corner-semantik matchar vanlig direkt Canary-movement utan ett extra PlayerBot-hörnförbud;
+- [x] dold eller oobserverad occupancy exponeras inte i planering och kan endast ge normaliserad `WorldRejected` vid servervalidering;
+- [x] fokuserad gate: build 0, unit 18/18, databasbackad integration 14/14, diff 0;
+- [x] source commit `8e0337c6f`;
+- [x] rapportarkiv `/home/playerbots/workspace/playerbots/logs/codex-reports/20260731-201923-m2a-walkability-contract.md`;
+- [x] slutreview: en blockerande floor-transition-risk fixad, upprepad review utan blocker.
+
+### Kvarvarande issue-sized arbete
+
+- [ ] M2B — lokal pathfinding, repath och stuck detection;
+- [ ] M2C — dörrar och enkla world transitions.
 
 ### Acceptance
 
