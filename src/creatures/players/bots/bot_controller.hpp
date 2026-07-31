@@ -7,6 +7,7 @@
 #pragma once
 
 #include "creatures/players/bots/bot_interaction.hpp"
+#include "creatures/players/bots/bot_combat.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
@@ -42,6 +43,9 @@ public:
 	[[nodiscard]] BotTransitionResult advanceTransition(std::chrono::milliseconds now);
 	[[nodiscard]] BotTransitionResult cancelTransition();
 	[[nodiscard]] const BotTransitionProgress &getTransitionProgress() const { return transitionProgress; }
+	[[nodiscard]] BotTargetSelectionResult evaluateCombat(const BotCombatPolicy &policy = {});
+	void cancelCombat() { combatLock.cancel(); }
+	[[nodiscard]] const BotTargetLock &getCombatLock() const { return combatLock; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -60,4 +64,5 @@ private:
 	BotRouteResult route;
 	BotRouteProgress routeProgress;
 	BotTransitionProgress transitionProgress;
+	BotTargetLock combatLock;
 };

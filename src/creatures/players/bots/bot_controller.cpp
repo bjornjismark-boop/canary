@@ -56,6 +56,15 @@ BotActionResult BotController::tick(std::chrono::milliseconds now) {
 	return result;
 }
 
+BotTargetSelectionResult BotController::evaluateCombat(const BotCombatPolicy &policy) {
+	const auto controlledPlayer = player.lock();
+	const auto base = BotPerception::observe(controlledPlayer);
+	if (!base) return { .failure = BotCombatFailure::InvalidLifecycle, .reason = BotCombatEligibility::InvalidLifecycle };
+	const auto observation = BotCombat::observe(controlledPlayer, *base);
+	if (!observation) return { .failure = BotCombatFailure::InvalidLifecycle, .reason = BotCombatEligibility::InvalidLifecycle };
+	return BotCombat::select(*observation, policy, combatLock);
+}
+
 BotActionResult BotController::execute(const BotAction &action, std::chrono::milliseconds now) {
 	if (now < blackboard.nextActionAt) {
 		return { BotActionStatus::Rejected, BotActionFailure::RateLimited, blackboard.attempts, blackboard.nextActionAt - now };

@@ -62,6 +62,7 @@ std::optional<BotObservation> BotPerception::observe(const std::shared_ptr<Playe
 		BotTileObservation tileObservation { .position = position };
 		const auto tile = g_game().map.getTile(position);
 		if (tile) {
+			tileObservation.protectionZone = tile->hasFlag(TILESTATE_PROTECTIONZONE);
 			const auto &ground = tile->getGround();
 			tileObservation.hasGround = ground != nullptr;
 			if (ground) {
@@ -106,6 +107,7 @@ std::optional<BotObservation> BotPerception::observe(const std::shared_ptr<Playe
 			| (static_cast<uint64_t>(tile.hasGround) << 40U)
 			| (static_cast<uint64_t>(tile.terrainBlocked) << 41U)
 			| (static_cast<uint64_t>(tile.hazardous) << 42U);
+		revision ^= static_cast<uint64_t>(tile.protectionZone) << 43U;
 		revision *= 1099511628211ULL;
 	}
 	observation.topologyRevision = revision;

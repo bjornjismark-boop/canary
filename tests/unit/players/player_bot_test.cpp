@@ -8,6 +8,7 @@
 
 #include "creatures/players/player.hpp"
 #include "creatures/players/bots/bot_runtime.hpp"
+#include "creatures/players/bots/bot_combat.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -339,3 +340,45 @@ TEST(PlayerBotInteractionTest, DestinationRegionSupportsNonUnitFloorChanges) {
 }
 TEST(PlayerBotInteractionTest, DifferentFloorCanBeForbidden) { BotTransitionRequest r { .target = transitionTarget(), .allowDifferentFloor = false }; EXPECT_FALSE(BotInteraction::destinationAllowed(r, Position(1, 1, 7), Position(2, 1, 8))); }
 TEST(PlayerBotInteractionTest, BoundedTransitionEvaluationUsesSingleValueTarget) { EXPECT_TRUE(std::is_trivially_destructible_v<BotInteractionTarget>); }
+
+namespace {
+BotCombatObservation combatObservation() {
+	BotCombatObservation o; o.revision = 17; o.self.position = Position(100, 100, 7); o.self.revision = 17;
+	BotCombatCreatureObservation c { .id = 42, .position = Position(101, 100, 7), .kind = BotCombatCreatureKind::Monster, .healthPercent = 75, .directDistance = 1, .routeCost = 100, .reachability = BotCombatReachability::Reachable, .visibility = BotCombatVisibility::Visible, .revision = 17 };
+	c.signature = BotCombat::signature(c); o.creatures.push_back(c); return o;
+}
+void refresh(BotCombatCreatureObservation &c) { c.signature = BotCombat::signature(c); }
+}
+
+TEST(PlayerBotCombatTest, CombatObservationContainsValuesOnly) { EXPECT_FALSE(combatObservation().containsWorldOwnership()); }
+TEST(PlayerBotCombatTest, ObservationRetainsNoCreatureOrPlayerOwnership) { EXPECT_TRUE(std::is_trivially_destructible_v<BotCombatCreatureObservation>); }
+TEST(PlayerBotCombatTest, OrdinaryPlayersAreRejectedByDefault) { auto o=combatObservation(); o.creatures[0].kind=BotCombatCreatureKind::Player; refresh(o.creatures[0]); EXPECT_EQ(BotCombatEligibility::PlayerTargetDisallowed, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, NpcsAreRejected) { auto o=combatObservation(); o.creatures[0].kind=BotCombatCreatureKind::Npc; refresh(o.creatures[0]); EXPECT_EQ(BotCombatEligibility::NpcTargetDisallowed, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, PlayerOwnedSummonsAreRejected) { auto o=combatObservation(); o.creatures[0].kind=BotCombatCreatureKind::Summon; o.creatures[0].summonMasterId=9; refresh(o.creatures[0]); EXPECT_EQ(BotCombatEligibility::OwnedSummonDisallowed, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, VisibleMonsterIsEligible) { auto o=combatObservation(); EXPECT_EQ(BotCombatEligibility::Eligible, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, HiddenCreatureIsRejected) { auto o=combatObservation(); o.creatures[0].visibility=BotCombatVisibility::Hidden; EXPECT_EQ(BotCombatEligibility::NotVisible, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, DifferentFloorCreatureIsRejected) { auto o=combatObservation(); o.creatures[0].position.z=8; refresh(o.creatures[0]); EXPECT_EQ(BotCombatEligibility::DifferentFloor, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, StaleObservationIsRejected) { auto o=combatObservation(); o.creatures[0].revision=16; EXPECT_EQ(BotCombatEligibility::StaleObservation, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, DeadOrRemovedTargetIsRejected) { auto o=combatObservation(); o.creatures[0].deadOrRemoved=true; EXPECT_EQ(BotCombatEligibility::DeadOrRemoved, BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, CurrentAttackerReceivesIncreasedThreat) { auto o=combatObservation(); auto a=BotCombat::assess(o,o.creatures[0],{},1,0); o.creatures[0].attackingBot=true; auto b=BotCombat::assess(o,o.creatures[0],{},1,0); EXPECT_GT(b.total,a.total); }
+TEST(PlayerBotCombatTest, RecentDamagingCreatureReceivesIncreasedThreat) { auto o=combatObservation(); auto a=BotCombat::assess(o,o.creatures[0],{},1,0); o.creatures[0].recentlyDamagedBot=true; EXPECT_GT(BotCombat::assess(o,o.creatures[0],{},1,0).total,a.total); }
+TEST(PlayerBotCombatTest, CloserReachableTargetReceivesExpectedContribution) { auto o=combatObservation(); auto a=BotCombat::assess(o,o.creatures[0],{},1,0); o.creatures[0].directDistance=2; EXPECT_LT(BotCombat::assess(o,o.creatures[0],{},1,0).distance,a.distance); }
+TEST(PlayerBotCombatTest, UnreachableTargetIsRejected) { auto o=combatObservation(); o.creatures[0].reachability=BotCombatReachability::Unreachable; EXPECT_EQ(BotCombatEligibility::Unreachable,BotCombat::eligible(o,o.creatures[0],{})); }
+TEST(PlayerBotCombatTest, VisibleHealthPercentageContributesDeterministically) { auto o=combatObservation(); auto a=BotCombat::assess(o,o.creatures[0],{},1,0); o.creatures[0].healthPercent=50; EXPECT_GT(BotCombat::assess(o,o.creatures[0],{},1,0).visibleHealth,a.visibleHealth); }
+TEST(PlayerBotCombatTest, CurrentValidTargetReceivesRetentionBenefit) { auto o=combatObservation(); EXPECT_GT(BotCombat::assess(o,o.creatures[0],{},1,42).retention,0); }
+TEST(PlayerBotCombatTest, ChallengerBelowSwitchThresholdDoesNotReplaceTarget) { auto o=combatObservation(); auto c=o.creatures[0]; c.id=43; c.followingBot=true; refresh(c); o.creatures.push_back(c); BotTargetLock l{42,0}; auto r=BotCombat::select(o,{},l); EXPECT_EQ(42U,r.selectedCreatureId); }
+TEST(PlayerBotCombatTest, ChallengerAboveSwitchThresholdReplacesTarget) { auto o=combatObservation(); auto c=o.creatures[0]; c.id=43; c.attackingBot=true; c.recentlyDamagedBot=true; refresh(c); o.creatures.push_back(c); BotCombatPolicy p; p.switchThreshold=0; BotTargetLock l{42,0}; EXPECT_EQ(43U,BotCombat::select(o,p,l).selectedCreatureId); }
+TEST(PlayerBotCombatTest, InvalidCurrentTargetIsReleasedImmediately) { auto o=combatObservation(); o.creatures[0].deadOrRemoved=true; BotTargetLock l{42,0}; auto r=BotCombat::select(o,{},l); EXPECT_EQ(BotCombatIntent::ReleaseTarget,r.intent); EXPECT_EQ(0U,l.creatureId); }
+TEST(PlayerBotCombatTest, EqualCandidatesUseDeterministicTieBreaking) { auto o=combatObservation(); auto c=o.creatures[0]; c.id=7; refresh(c); o.creatures.push_back(c); BotTargetLock l; EXPECT_EQ(7U,BotCombat::select(o,{},l).selectedCreatureId); }
+TEST(PlayerBotCombatTest, RepeatedIdenticalObservationsProduceIdenticalSelection) { auto o=combatObservation(); BotTargetLock a,b; EXPECT_EQ(BotCombat::select(o,{},a).selectedCreatureId,BotCombat::select(o,{},b).selectedCreatureId); }
+TEST(PlayerBotCombatTest, CandidateCountIsBounded) { auto o=combatObservation(); for(uint32_t i=0;i<5;i++){auto c=o.creatures[0];c.id=100+i;refresh(c);o.creatures.push_back(c);} BotCombatPolicy p;p.maxCandidates=2;BotTargetLock l;auto r=BotCombat::select(o,p,l);EXPECT_EQ(2U,r.evaluatedCandidates);EXPECT_TRUE(r.truncated); }
+TEST(PlayerBotCombatTest, OperationBudgetIsBounded) { auto o=combatObservation(); BotCombatPolicy p;p.maxScoreOperations=7;BotTargetLock l;auto r=BotCombat::select(o,p,l);EXPECT_EQ(0U,r.scoreOperations);EXPECT_EQ(BotCombatFailure::EvaluationBudgetExceeded,r.failure); }
+TEST(PlayerBotCombatTest, ScoreArithmeticCannotOverflow) { auto o=combatObservation(); BotCombatPolicy p;p.attackerWeight=INT32_MAX;p.scoreLimit=1000;o.creatures[0].attackingBot=true;EXPECT_EQ(1000,BotCombat::assess(o,o.creatures[0],p,UINT32_MAX,0).total); }
+TEST(PlayerBotCombatTest, ExplicitNoTargetResult) { BotCombatObservation o;o.revision=1;BotTargetLock l;auto r=BotCombat::select(o,{},l);EXPECT_EQ(BotCombatFailure::NoTarget,r.failure); }
+TEST(PlayerBotCombatTest, CombatIntentContainsValuesOnly) { EXPECT_TRUE(std::is_trivially_copyable_v<BotCombatIntent>); }
+TEST(PlayerBotCombatTest, EvaluationDoesNotAlterAttackedCreatureState) { auto o=combatObservation();const auto id=o.self.attackedCreatureId;BotTargetLock l;(void)BotCombat::select(o,{},l);EXPECT_EQ(id,o.self.attackedCreatureId); }
+TEST(PlayerBotCombatTest, EvaluationDoesNotAlterFollowState) { auto o=combatObservation();const auto id=o.self.followedCreatureId;BotTargetLock l;(void)BotCombat::select(o,{},l);EXPECT_EQ(id,o.self.followedCreatureId); }
+TEST(PlayerBotCombatTest, InvalidLifecycleIsRejected) { auto o=combatObservation();BotTargetLock l;EXPECT_EQ(BotCombatFailure::InvalidLifecycle,BotCombat::select(o,{},l,false).failure); }
+TEST(PlayerBotCombatTest, CancellationClearsTargetLock) { BotTargetLock l{42,1};l.cancel();EXPECT_EQ(0U,l.creatureId);EXPECT_TRUE(l.cancelled); }
+TEST(PlayerBotCombatTest, SessionCloseClearsTargetLock) { BotTargetLock l{42,1};l={};EXPECT_EQ(0U,l.creatureId); }
+TEST(PlayerBotCombatTest, ScoreBreakdownEqualsFinalTotal) { auto o=combatObservation();auto b=BotCombat::assess(o,o.creatures[0],{},1,0);EXPECT_EQ(b.total,b.attacker+b.recentDamage+b.following+b.distance+b.route+b.visibleHealth+b.crowdRisk+b.retention+b.hysteresis); }

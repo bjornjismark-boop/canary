@@ -169,3 +169,8 @@ BotTransitionResult BotManager::cancelTransition(const std::string &name) {
 	const auto it = sessions.find(asLowerCaseString(name));
 	return it == sessions.end() ? BotTransitionResult { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed } : it->second->cancelTransition();
 }
+
+BotTargetSelectionResult BotManager::evaluateCombat(const std::string &name, const BotCombatPolicy &policy) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotTargetSelectionResult { .failure = BotCombatFailure::InvalidLifecycle, .reason = BotCombatEligibility::InvalidLifecycle } : it->second->evaluateCombat(policy);
+}

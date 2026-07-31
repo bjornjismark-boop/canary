@@ -184,6 +184,11 @@ BotTransitionResult BotSession::cancelTransition() {
 	return controller->cancelTransition();
 }
 
+BotTargetSelectionResult BotSession::evaluateCombat(const BotCombatPolicy &policy) {
+	if (state != BotSessionState::Placed || !controller) return { .failure = BotCombatFailure::InvalidLifecycle, .reason = BotCombatEligibility::InvalidLifecycle };
+	return controller->evaluateCombat(policy);
+}
+
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
 		return false;
@@ -257,7 +262,7 @@ bool BotSession::retryPendingSave() {
 }
 
 void BotSession::finishClose() {
-	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); }
+	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); controller->cancelCombat(); }
 	controller.reset();
 	player.reset();
 	state = BotSessionState::Closed;

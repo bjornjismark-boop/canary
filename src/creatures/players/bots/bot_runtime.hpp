@@ -52,6 +52,7 @@ struct BotTileObservation {
 	bool hasGround = false;
 	bool terrainBlocked = false;
 	bool hazardous = false;
+	bool protectionZone = false;
 
 	auto operator<=>(const BotTileObservation &) const = default;
 };
