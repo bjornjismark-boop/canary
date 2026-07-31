@@ -8,6 +8,7 @@
 
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/player.hpp"
+#include "creatures/combat/combat.hpp"
 #include "game/game.hpp"
 #include "lua/creature/actions.hpp"
 #include "lib/logging/log_with_spd_log.hpp"
@@ -63,6 +64,99 @@ BotTargetSelectionResult BotController::evaluateCombat(const BotCombatPolicy &po
 	const auto observation = BotCombat::observe(controlledPlayer, *base);
 	if (!observation) return { .failure = BotCombatFailure::InvalidLifecycle, .reason = BotCombatEligibility::InvalidLifecycle };
 	return BotCombat::select(*observation, policy, combatLock);
+}
+
+void BotController::cancelCombat() {
+	if (const auto controlledPlayer = player.lock(); controlledPlayer && controlledPlayer->getAttackedCreature()) game.playerSetAttackedCreature(controlledPlayer->getID(), 0);
+	combatLock.cancel();
+	attackExecution.cancel();
+	(void)cancelRoute();
+}
+
+BotCombatExecutionResult BotController::executeCombat(const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy) {
+	auto fail = [&](BotCombatExecutionOutcome outcome, BotAttackFailure failure, BotAttackState state, uint16_t world = 0) {
+		attackExecution.state = state;
+		return BotCombatExecutionResult { outcome, failure, state, BotRangeAssessment::UnknownWeaponRange, request.targetCreatureId, world, attackExecution.assignmentAttempts };
+	};
+	const auto controlledPlayer = player.lock();
+	if (!controlledPlayer || !controlledPlayer->isBotControlled() || controlledPlayer->isRemoved() || !controlledPlayer->getTile()) return fail(BotCombatExecutionOutcome::InvalidLifecycle, BotAttackFailure::InvalidLifecycle, BotAttackState::Failed);
+	if (request.targetCreatureId == 0 || combatLock.creatureId != request.targetCreatureId) return fail(BotCombatExecutionOutcome::InvalidTarget, BotAttackFailure::InvalidTarget, BotAttackState::Failed);
+	const bool live = attackExecution.state == BotAttackState::Validating || attackExecution.state == BotAttackState::AcquiringTarget || attackExecution.state == BotAttackState::AttackPending || attackExecution.state == BotAttackState::Repositioning;
+	if (live && attackExecution.request.targetCreatureId != request.targetCreatureId) return { BotCombatExecutionOutcome::Pending, BotAttackFailure::None, attackExecution.state, BotRangeAssessment::UnknownWeaponRange, attackExecution.request.targetCreatureId };
+	if (attackExecution.request.targetCreatureId != request.targetCreatureId) {
+		attackExecution = { .state = BotAttackState::TargetSelected, .request = request, .timing = { .timeoutDeadline = now + policy.timeout }, .lastObservedPosition = controlledPlayer->getPosition() };
+	}
+	if (now > attackExecution.timing.timeoutDeadline) { game.playerSetAttackedCreature(controlledPlayer->getID(), 0); return fail(BotCombatExecutionOutcome::TimedOut, BotAttackFailure::TimedOut, BotAttackState::Failed); }
+	if (now < attackExecution.timing.nextPermittedReassessment) return { BotCombatExecutionOutcome::CooldownActive, BotAttackFailure::None, BotAttackState::Cooldown, BotRangeAssessment::UnknownWeaponRange, request.targetCreatureId, 0, attackExecution.assignmentAttempts, attackExecution.timing.nextPermittedReassessment - now };
+
+	attackExecution.state = BotAttackState::Validating;
+	const auto base = BotPerception::observe(controlledPlayer);
+	const auto combat = base ? BotCombat::observe(controlledPlayer, *base) : std::nullopt;
+	if (!base || !combat) return fail(BotCombatExecutionOutcome::InvalidLifecycle, BotAttackFailure::InvalidLifecycle, BotAttackState::Failed);
+	const auto observed = std::ranges::find(combat->creatures, request.targetCreatureId, &BotCombatCreatureObservation::id);
+	if (observed == combat->creatures.end()) { game.playerSetAttackedCreature(controlledPlayer->getID(), 0); return fail(BotCombatExecutionOutcome::TargetLost, BotAttackFailure::NotVisible, BotAttackState::TargetLost); }
+	if (request.observationRevision != combat->revision || request.targetSignature != observed->signature) { game.playerSetAttackedCreature(controlledPlayer->getID(), 0); return fail(BotCombatExecutionOutcome::StaleObservation, BotAttackFailure::StaleObservation, BotAttackState::Failed); }
+	if (observed->kind != BotCombatCreatureKind::Monster) { game.playerSetAttackedCreature(controlledPlayer->getID(), 0); return fail(BotCombatExecutionOutcome::PolicyRejected, BotAttackFailure::PolicyRejected, BotAttackState::Failed); }
+	const auto eligibility = BotCombat::eligible(*combat, *observed, policy.targetPolicy);
+	if (eligibility != BotCombatEligibility::Eligible) {
+		game.playerSetAttackedCreature(controlledPlayer->getID(), 0);
+		if (eligibility == BotCombatEligibility::DifferentFloor) return fail(BotCombatExecutionOutcome::DifferentFloor, BotAttackFailure::DifferentFloor, BotAttackState::TargetLost);
+		if (eligibility == BotCombatEligibility::NotVisible) return fail(BotCombatExecutionOutcome::NotVisible, BotAttackFailure::NotVisible, BotAttackState::TargetLost);
+		if (eligibility == BotCombatEligibility::ProtectedByZone) return fail(BotCombatExecutionOutcome::ProtectedByZone, BotAttackFailure::ProtectedByZone, BotAttackState::Failed);
+		if (eligibility == BotCombatEligibility::Unreachable) return fail(BotCombatExecutionOutcome::Unreachable, BotAttackFailure::Unreachable, BotAttackState::Failed);
+		return fail(BotCombatExecutionOutcome::PolicyRejected, BotAttackFailure::PolicyRejected, BotAttackState::Failed);
+	}
+	const auto target = game.getCreatureByID(request.targetCreatureId);
+	if (!target || target->isRemoved() || target->getHealth() <= 0 || !controlledPlayer->canSeeCreature(target)) { game.playerSetAttackedCreature(controlledPlayer->getID(), 0); return fail(BotCombatExecutionOutcome::TargetLost, BotAttackFailure::InvalidTarget, BotAttackState::TargetLost); }
+	const ReturnValue authority = Combat::canTargetCreature(controlledPlayer, target);
+	if (authority != RETURNVALUE_NOERROR) {
+		if (authority == RETURNVALUE_ACTIONNOTPERMITTEDINPROTECTIONZONE || authority == RETURNVALUE_ACTIONNOTPERMITTEDINANOPVPZONE) return fail(BotCombatExecutionOutcome::ProtectedByZone, BotAttackFailure::ProtectedByZone, BotAttackState::Failed, static_cast<uint16_t>(authority));
+		if (authority == RETURNVALUE_TURNSECUREMODETOATTACKUNMARKEDPLAYERS) return fail(BotCombatExecutionOutcome::SecureModeRejected, BotAttackFailure::SecureModeRejected, BotAttackState::Failed, static_cast<uint16_t>(authority));
+		return fail(BotCombatExecutionOutcome::WorldRejected, BotAttackFailure::WorldRejected, BotAttackState::Failed, static_cast<uint16_t>(authority));
+	}
+	if (combat->self.weapon == BotWeaponCategory::Distance && !combat->self.ammunitionAvailable) return fail(BotCombatExecutionOutcome::MissingAmmunition, BotAttackFailure::MissingAmmunition, BotAttackState::Failed);
+	const bool lineOfSight = game.canThrowObjectTo(controlledPlayer->getPosition(), target->getPosition(), SightLine_CheckSightLineAndFloor, combat->self.attackRange, combat->self.attackRange);
+	const auto range = BotCombat::assessRange(*combat, *observed, lineOfSight);
+	if (range != BotRangeAssessment::InRange) {
+		const auto originDistance = std::max(Position::getDistanceX(request.combatOrigin, controlledPlayer->getPosition()), Position::getDistanceY(request.combatOrigin, controlledPlayer->getPosition()));
+		if (originDistance > policy.maxDistanceFromOrigin || attackExecution.repositionAttempts >= policy.maxRepositionAttempts) return fail(BotCombatExecutionOutcome::RetryExhausted, BotAttackFailure::RetryExhausted, BotAttackState::Failed);
+		auto positioning = BotCombat::position(*base, *combat, *observed, policy, true);
+		if (positioning.outcome != BotCombatExecutionOutcome::RepositionRequired) return { positioning.outcome, positioning.failure, BotAttackState::Failed, positioning.range, request.targetCreatureId, 0, attackExecution.repositionAttempts, {}, positioning };
+		if (routeProgress.state == BotRouteState::Idle || routeProgress.destination != positioning.request.destination || attackExecution.lastTargetPosition != observed->position) {
+			(void)startRoute(positioning.request.destination, now, policy.routeLimits); ++attackExecution.repositionAttempts;
+		}
+		attackExecution.lastTargetPosition = observed->position;
+		attackExecution.state = BotAttackState::Repositioning;
+		const auto before = controlledPlayer->getPosition();
+		const auto progress = advanceRoute(now);
+		const auto after = controlledPlayer->getPosition();
+		if (after != before) attackExecution.noProgressCount = 0; else ++attackExecution.noProgressCount;
+		attackExecution.timing.nextPermittedReassessment = now + policy.reassessmentInterval;
+		if (progress.state == BotRouteState::Failed || attackExecution.noProgressCount > policy.maxNoProgress) return fail(BotCombatExecutionOutcome::Unreachable, BotAttackFailure::Unreachable, BotAttackState::Failed);
+		return { BotCombatExecutionOutcome::RepositionStarted, BotAttackFailure::OutOfRange, BotAttackState::Repositioning, range, request.targetCreatureId, 0, attackExecution.repositionAttempts, policy.reassessmentInterval, positioning };
+	}
+	attackExecution.state = BotAttackState::InRange;
+	if (const auto attacked = controlledPlayer->getAttackedCreature(); attacked && attacked->getID() == request.targetCreatureId) {
+		attackExecution.timing.nextPermittedReassessment = now + policy.reassessmentInterval;
+		attackExecution.timing.observedNextAttackTime = now + std::chrono::milliseconds(combat->self.attackSpeed);
+		return { BotCombatExecutionOutcome::AlreadyTargeting, BotAttackFailure::None, BotAttackState::Cooldown, range, request.targetCreatureId };
+	}
+	attackExecution.state = BotAttackState::AcquiringTarget;
+	attackExecution.timing.lastAssignmentAttempt = now;
+	++attackExecution.assignmentAttempts;
+	game.playerSetAttackedCreature(controlledPlayer->getID(), request.targetCreatureId);
+	const auto assigned = controlledPlayer->getAttackedCreature();
+	if (!assigned || assigned->getID() != request.targetCreatureId) {
+		if (attackExecution.assignmentAttempts >= policy.maxAssignmentRetries) return fail(BotCombatExecutionOutcome::RetryExhausted, BotAttackFailure::RetryExhausted, BotAttackState::Failed);
+		const auto delay = BotCombat::executionBackoff(policy, attackExecution.assignmentAttempts);
+		attackExecution.timing.nextPermittedReassessment = now + delay;
+		return { BotCombatExecutionOutcome::RetryScheduled, BotAttackFailure::WorldRejected, BotAttackState::AttackPending, range, request.targetCreatureId, static_cast<uint16_t>(authority), attackExecution.assignmentAttempts, delay };
+	}
+	attackExecution.timing.lastAcceptedAssignment = now;
+	attackExecution.timing.nextPermittedReassessment = now + policy.reassessmentInterval;
+	attackExecution.timing.observedNextAttackTime = now + std::chrono::milliseconds(combat->self.attackSpeed);
+	attackExecution.state = BotAttackState::Cooldown;
+	return { BotCombatExecutionOutcome::TargetAcquired, BotAttackFailure::None, BotAttackState::Cooldown, range, request.targetCreatureId, 0, attackExecution.assignmentAttempts };
 }
 
 BotActionResult BotController::execute(const BotAction &action, std::chrono::milliseconds now) {

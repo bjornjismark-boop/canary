@@ -189,6 +189,11 @@ BotTargetSelectionResult BotSession::evaluateCombat(const BotCombatPolicy &polic
 	return controller->evaluateCombat(policy);
 }
 
+BotCombatExecutionResult BotSession::executeCombat(const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy) {
+	if (state != BotSessionState::Placed || !controller) return { BotCombatExecutionOutcome::InvalidLifecycle, BotAttackFailure::InvalidLifecycle, BotAttackState::Failed };
+	return controller->executeCombat(request, now, policy);
+}
+
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
 		return false;

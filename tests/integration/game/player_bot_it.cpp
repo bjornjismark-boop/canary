@@ -8,6 +8,7 @@
 
 #include "creatures/players/bots/bot_manager.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
+#include "creatures/combat/combat.hpp"
 #include "creatures/players/player.hpp"
 #include "creatures/monsters/monster.hpp"
 #include "creatures/monsters/monsters.hpp"
@@ -1076,4 +1077,44 @@ TEST(PlayerBotIntegrationTest, AttackingMonsterOutranksPassiveAndLifecycleCloseC
 	EXPECT_EQ(passive->getID(), manager.evaluateCombat(fixture.name, immediateSwitch).selectedCreatureId);
 	EXPECT_TRUE(g_game().removeCreature(passive,true)); EXPECT_TRUE(g_game().removeCreature(attacker,true)); EXPECT_TRUE(manager.logout(fixture.name,false)); EXPECT_EQ(nullptr,session->getCombatLock());
 	const auto closed=manager.evaluateCombat(fixture.name); EXPECT_EQ(BotCombatFailure::InvalidLifecycle,closed.failure); ASSERT_TRUE(fixture.cleanup()); EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, CombatExecutionUsesOrdinaryAttackSelectionAndSuppressesSpam) {
+	PlayerBotDatabaseFixture fixture(g_database()); const Position targetPosition(fixture.start.x+1,fixture.start.y,fixture.start.z);
+	createWalkableTile(fixture.start); createWalkableTile(targetPosition); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session);
+	const auto player=std::const_pointer_cast<Player>(session->getPlayer()); const auto monsterType=std::make_shared<MonsterType>("ExecutionMonster"); monsterType->info.health=100000; monsterType->info.healthMax=100000; const auto monster=std::make_shared<Monster>(monsterType); ASSERT_TRUE(g_game().placeCreature(monster,targetPosition,false,true));
+	const auto selection=manager.evaluateCombat(fixture.name); ASSERT_EQ(monster->getID(),selection.selectedCreatureId);
+	ASSERT_EQ(player,g_game().getPlayerByID(player->getID())); ASSERT_EQ(monster,g_game().getCreatureByID(monster->getID())); ASSERT_TRUE(player->canSeeCreature(monster)); ASSERT_EQ(RETURNVALUE_NOERROR,Combat::canTargetCreature(player,monster));
+	ASSERT_TRUE(player->setAttackedCreature(monster)); ASSERT_EQ(monster,player->getAttackedCreature()); player->setAttackedCreature(nullptr);
+	g_game().playerSetAttackedCreature(player->getID(),monster->getID()); ASSERT_EQ(monster,player->getAttackedCreature()); g_game().playerSetAttackedCreature(player->getID(),0); ASSERT_EQ(nullptr,player->getAttackedCreature());
+	const auto base=BotPerception::observe(player); ASSERT_TRUE(base); const auto combat=BotCombat::observe(player,*base); ASSERT_TRUE(combat); const auto observed=std::ranges::find(combat->creatures,monster->getID(),&BotCombatCreatureObservation::id); ASSERT_NE(combat->creatures.end(),observed);
+	const BotCombatExecutionRequest request{monster->getID(),combat->revision,observed->signature,player->getPosition()}; const auto health=player->getHealth(); const auto mana=player->getMana();
+	const auto acquired=manager.executeCombat(fixture.name,request,std::chrono::milliseconds(1000)); EXPECT_EQ(BotCombatExecutionOutcome::TargetAcquired,acquired.outcome); ASSERT_NE(nullptr,player->getAttackedCreature()); EXPECT_EQ(monster->getID(),player->getAttackedCreature()->getID());
+	const auto cooldown=manager.executeCombat(fixture.name,request,std::chrono::milliseconds(1001)); EXPECT_EQ(BotCombatExecutionOutcome::CooldownActive,cooldown.outcome); EXPECT_EQ(1U,session->getAttackExecutionState()->assignmentAttempts); EXPECT_EQ(health,player->getHealth()); EXPECT_EQ(mana,player->getMana());
+	g_game().playerSetAttackedCreature(player->getID(),0); EXPECT_EQ(nullptr,player->getAttackedCreature()); g_game().playerSetAttackedCreature(player->getID(),monster->getID()); ASSERT_NE(nullptr,player->getAttackedCreature());
+	EXPECT_TRUE(g_game().removeCreature(monster,true)); EXPECT_EQ(nullptr,player->getAttackedCreature()); EXPECT_TRUE(manager.logout(fixture.name,false)); EXPECT_EQ(nullptr,session->getAttackExecutionState()); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, CombatExecutionRevalidatesRealNonPvpTargets) {
+	PlayerBotDatabaseFixture fixture(g_database()); PlayerBotDatabaseFixture otherFixture(g_database(),Position(fixture.start.x+1,fixture.start.y,fixture.start.z)); const Position npcPosition(fixture.start.x,fixture.start.y+1,fixture.start.z), summonPosition(fixture.start.x+1,fixture.start.y+1,fixture.start.z);
+	createWalkableTile(fixture.start);createWalkableTile(otherFixture.start);createWalkableTile(npcPosition);createWalkableTile(summonPosition);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);const auto other=loginBotOrReport(manager,otherFixture.name);ASSERT_NE(nullptr,session);ASSERT_NE(nullptr,other);
+	auto npcType=std::make_shared<NpcType>("ExecutionNpc");npcType->name="ExecutionNpc";npcType->nameDescription="ExecutionNpc";const auto npc=std::make_shared<Npc>(npcType);ASSERT_TRUE(g_game().placeCreature(npc,npcPosition,false,true));const auto summon=std::make_shared<Monster>(std::make_shared<MonsterType>("ExecutionSummon"));ASSERT_TRUE(summon->setMaster(std::const_pointer_cast<Player>(other->getPlayer())));ASSERT_TRUE(g_game().placeCreature(summon,summonPosition,false,true));
+	EXPECT_EQ(0U,manager.evaluateCombat(fixture.name).selectedCreatureId);EXPECT_EQ(nullptr,std::const_pointer_cast<Player>(session->getPlayer())->getAttackedCreature());
+	EXPECT_TRUE(g_game().removeCreature(npc,true));EXPECT_TRUE(g_game().removeCreature(summon,true));EXPECT_TRUE(manager.logout(otherFixture.name,false));EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(otherFixture.cleanup());ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, CombatPositioningIsBoundedAndValueOnly) {
+	PlayerBotDatabaseFixture fixture(g_database()); const Position targetPosition(fixture.start.x+3,fixture.start.y,fixture.start.z); for(int x=0;x<=3;++x)for(int y=-2;y<=2;++y)createWalkableTile(Position(fixture.start.x+x,fixture.start.y+y,fixture.start.z));
+	BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);const auto player=std::const_pointer_cast<Player>(session->getPlayer());const auto monsterType=std::make_shared<MonsterType>("PositionMonster");monsterType->info.health=100000;monsterType->info.healthMax=100000;const auto monster=std::make_shared<Monster>(monsterType);ASSERT_TRUE(g_game().placeCreature(monster,targetPosition,false,true));
+	ASSERT_EQ(monster->getID(),manager.evaluateCombat(fixture.name).selectedCreatureId);const auto base=BotPerception::observe(player);ASSERT_TRUE(base);const auto combat=BotCombat::observe(player,*base);ASSERT_TRUE(combat);const auto observed=std::ranges::find(combat->creatures,monster->getID(),&BotCombatCreatureObservation::id);ASSERT_NE(combat->creatures.end(),observed);const BotCombatExecutionRequest request{monster->getID(),combat->revision,observed->signature,player->getPosition()};const Position before=player->getPosition();
+	const auto result=manager.executeCombat(fixture.name,request,std::chrono::milliseconds(2000));EXPECT_EQ(BotCombatExecutionOutcome::RepositionStarted,result.outcome);EXPECT_TRUE(result.positioning.has_value());EXPECT_FALSE(result.positioning->containsWorldOwnership());EXPECT_NE(before,player->getPosition());EXPECT_LE(session->getAttackExecutionState()->repositionAttempts,3U);
+	EXPECT_TRUE(g_game().removeCreature(monster,true));EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, OrdinaryHeadlessNetworkVisibilityRemainsClientBound) {
+	const auto ordinary = std::make_shared<Player>();
+	const auto bot = std::make_shared<Player>(PlayerControlType::Bot);
+	const Position nearby(1, 1, 0);
+	EXPECT_FALSE(ordinary->canSee(nearby));
+	EXPECT_TRUE(bot->canSee(nearby));
 }

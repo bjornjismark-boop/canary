@@ -45,6 +45,7 @@ public:
 	[[nodiscard]] BotTransitionResult advanceTransition(const std::string &name, std::chrono::milliseconds now);
 	[[nodiscard]] BotTransitionResult cancelTransition(const std::string &name);
 	[[nodiscard]] BotTargetSelectionResult evaluateCombat(const std::string &name, const BotCombatPolicy &policy = {});
+	[[nodiscard]] BotCombatExecutionResult executeCombat(const std::string &name, const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy = {});
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

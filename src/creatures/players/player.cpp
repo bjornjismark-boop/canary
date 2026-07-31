@@ -1396,7 +1396,7 @@ std::shared_ptr<KV> Player::kv() const {
 
 bool Player::canSee(const Position &pos) {
 	if (!client) {
-		return false;
+		return isBotControlled() && Creature::canSee(pos);
 	}
 	return client->canSee(pos);
 }

@@ -174,3 +174,8 @@ BotTargetSelectionResult BotManager::evaluateCombat(const std::string &name, con
 	const auto it = sessions.find(asLowerCaseString(name));
 	return it == sessions.end() ? BotTargetSelectionResult { .failure = BotCombatFailure::InvalidLifecycle, .reason = BotCombatEligibility::InvalidLifecycle } : it->second->evaluateCombat(policy);
 }
+
+BotCombatExecutionResult BotManager::executeCombat(const std::string &name, const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotCombatExecutionResult { BotCombatExecutionOutcome::InvalidLifecycle, BotAttackFailure::InvalidLifecycle, BotAttackState::Failed } : it->second->executeCombat(request, now, policy);
+}

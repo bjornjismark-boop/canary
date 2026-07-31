@@ -44,8 +44,10 @@ public:
 	[[nodiscard]] BotTransitionResult cancelTransition();
 	[[nodiscard]] const BotTransitionProgress &getTransitionProgress() const { return transitionProgress; }
 	[[nodiscard]] BotTargetSelectionResult evaluateCombat(const BotCombatPolicy &policy = {});
-	void cancelCombat() { combatLock.cancel(); }
+	[[nodiscard]] BotCombatExecutionResult executeCombat(const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy = {});
+	void cancelCombat();
 	[[nodiscard]] const BotTargetLock &getCombatLock() const { return combatLock; }
+	[[nodiscard]] const BotAttackExecutionState &getAttackExecutionState() const { return attackExecution; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -65,4 +67,5 @@ private:
 	BotRouteProgress routeProgress;
 	BotTransitionProgress transitionProgress;
 	BotTargetLock combatLock;
+	BotAttackExecutionState attackExecution;
 };

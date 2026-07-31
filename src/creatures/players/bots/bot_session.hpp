@@ -57,6 +57,7 @@ public:
 	[[nodiscard]] const BotRouteProgress *getRouteProgress() const { return controller ? &controller->getRouteProgress() : nullptr; }
 	[[nodiscard]] const BotTransitionProgress *getTransitionProgress() const { return controller ? &controller->getTransitionProgress() : nullptr; }
 	[[nodiscard]] const BotTargetLock *getCombatLock() const { return controller ? &controller->getCombatLock() : nullptr; }
+	[[nodiscard]] const BotAttackExecutionState *getAttackExecutionState() const { return controller ? &controller->getAttackExecutionState() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -77,6 +78,7 @@ private:
 	[[nodiscard]] BotTransitionResult advanceTransition(std::chrono::milliseconds now);
 	[[nodiscard]] BotTransitionResult cancelTransition();
 	[[nodiscard]] BotTargetSelectionResult evaluateCombat(const BotCombatPolicy &policy);
+	[[nodiscard]] BotCombatExecutionResult executeCombat(const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy);
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

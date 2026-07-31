@@ -10,6 +10,7 @@
 #include "creatures/monsters/monster.hpp"
 #include "creatures/npcs/npc.hpp"
 #include "creatures/players/player.hpp"
+#include "creatures/players/vocations/vocation.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "game/game.hpp"
 #include "items/item.hpp"
@@ -38,7 +39,10 @@ std::optional<BotCombatObservation> BotCombat::observe(const std::shared_ptr<Pla
 		.followedCreatureId = player->getFollowCreature() ? player->getFollowCreature()->getID() : 0, .revision = result.revision };
 	const auto weapon = player->getWeapon(true);
 	if (weapon) result.self.attackRange = std::max<uint8_t>(weapon->getShootRange(), 1);
-	switch (player->getWeaponType()) {
+	result.self.attackSpeed = player->getVocation()->getAttackSpeed();
+	result.self.ammunitionAvailable = !weapon || player->getWeapon() != nullptr;
+	const auto weaponType = weapon ? weapon->getWeaponType() : WEAPON_NONE;
+	switch (weaponType) {
 		case WEAPON_SWORD: case WEAPON_CLUB: case WEAPON_AXE: case WEAPON_FIST: result.self.weapon = BotWeaponCategory::Melee; result.self.archetype = BotCombatArchetype::Melee; break;
 		case WEAPON_DISTANCE: case WEAPON_AMMO: case WEAPON_MISSILE: result.self.weapon = BotWeaponCategory::Distance; result.self.archetype = BotCombatArchetype::Distance; break;
 		case WEAPON_WAND: result.self.weapon = BotWeaponCategory::Wand; result.self.archetype = BotCombatArchetype::Magic; break;
@@ -82,6 +86,59 @@ std::optional<BotCombatObservation> BotCombat::observe(const std::shared_ptr<Pla
 	}
 	std::ranges::sort(result.creatures, {}, &BotCombatCreatureObservation::id);
 	return result;
+}
+
+BotRangeAssessment BotCombat::assessRange(const BotCombatObservation &observation, const BotCombatCreatureObservation &creature, bool lineOfSightClear) {
+	if (creature.position.z != observation.self.position.z) return BotRangeAssessment::DifferentFloor;
+	if (creature.reachability != BotCombatReachability::Reachable) return BotRangeAssessment::Unreachable;
+	if (observation.self.weapon == BotWeaponCategory::Unknown || observation.self.attackRange == 0) return BotRangeAssessment::UnknownWeaponRange;
+	if (!lineOfSightClear && observation.self.weapon != BotWeaponCategory::Melee && observation.self.weapon != BotWeaponCategory::None) return BotRangeAssessment::LineOfSightBlocked;
+	const auto range = distance(observation.self.position, creature.position);
+	if (range == 0) return BotRangeAssessment::TooClose;
+	return range <= observation.self.attackRange ? BotRangeAssessment::InRange : BotRangeAssessment::TooFar;
+}
+
+BotCombatPositionResult BotCombat::position(const BotObservation &observation, const BotCombatObservation &combat, const BotCombatCreatureObservation &creature, const BotCombatExecutionPolicy &policy, bool requireLineOfSight) {
+	BotCombatPositionResult result;
+	result.request = { creature.id, observation.position, creature.position, {}, 1, combat.self.attackRange, policy.routeLimits };
+	result.range = assessRange(combat, creature, true);
+	if (result.range == BotRangeAssessment::InRange) { result.outcome = BotCombatExecutionOutcome::Succeeded; result.failure = BotAttackFailure::None; return result; }
+	if (result.range == BotRangeAssessment::DifferentFloor) { result.outcome = BotCombatExecutionOutcome::DifferentFloor; result.failure = BotAttackFailure::DifferentFloor; return result; }
+	if (result.range == BotRangeAssessment::Unreachable) { result.outcome = BotCombatExecutionOutcome::Unreachable; result.failure = BotAttackFailure::Unreachable; return result; }
+
+	uint32_t bestCost = std::numeric_limits<uint32_t>::max();
+	Position best;
+	BotRouteResult bestRoute;
+	for (const auto &tile : observation.visibleTiles) {
+		const auto candidateDistance = distance(tile.position, creature.position);
+		if (tile.position.z != observation.position.z || candidateDistance == 0 || candidateDistance > combat.self.attackRange) continue;
+		if (!tile.hasGround || tile.terrainBlocked || tile.blockingItemTypeId || tile.blockingCreatureId) continue;
+		if (distance(policy.maxDistanceFromOrigin ? result.request.origin : observation.position, tile.position) > policy.maxDistanceFromOrigin) continue;
+		if (requireLineOfSight && combat.self.weapon != BotWeaponCategory::Melee && !g_game().canThrowObjectTo(tile.position, creature.position, SightLine_CheckSightLineAndFloor, combat.self.attackRange, combat.self.attackRange)) continue;
+		++result.evaluatedPositions;
+		auto route = BotNavigation::findRoute(observation, { observation.position, tile.position, policy.routeLimits });
+		if (!route.found()) continue;
+		uint32_t cost = 0; Position previous = observation.position;
+		for (const auto &step : route.positions) {
+			const auto observedTile = std::ranges::find(observation.visibleTiles, step, &BotTileObservation::position);
+			if (observedTile == observation.visibleTiles.end()) { cost = std::numeric_limits<uint32_t>::max(); break; }
+			cost += (step.x != previous.x && step.y != previous.y ? BotNavigation::DiagonalCost : BotNavigation::CardinalCost) + (observedTile->hazardous ? BotNavigation::HazardCost : 0);
+			previous = step;
+		}
+		if (cost < bestCost || (cost == bestCost && tile.position < best)) { bestCost = cost; best = tile.position; bestRoute = std::move(route); }
+	}
+	if (bestCost == std::numeric_limits<uint32_t>::max()) { result.outcome = BotCombatExecutionOutcome::Unreachable; result.failure = requireLineOfSight ? BotAttackFailure::LineOfSightBlocked : BotAttackFailure::Unreachable; result.range = requireLineOfSight ? BotRangeAssessment::LineOfSightBlocked : BotRangeAssessment::Unreachable; return result; }
+	result.request.destination = best;
+	result.route = std::move(bestRoute);
+	result.outcome = BotCombatExecutionOutcome::RepositionRequired;
+	result.failure = BotAttackFailure::OutOfRange;
+	return result;
+}
+
+std::chrono::milliseconds BotCombat::executionBackoff(const BotCombatExecutionPolicy &policy, uint32_t attempt) {
+	if (attempt == 0) return {};
+	const auto exponent = std::min<uint32_t>(attempt - 1, 10);
+	return std::min(policy.maximumRetryBackoff, policy.initialRetryBackoff * (1U << exponent));
 }
 
 BotCombatEligibility BotCombat::eligible(const BotCombatObservation &o, const BotCombatCreatureObservation &c, const BotCombatPolicy &p) {
