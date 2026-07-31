@@ -79,7 +79,7 @@ Ge botten en säker och testbar beslutsloop utan att ännu implementera full nav
 
 ---
 
-## [ ] M2 — Lokal Navigation och World Interaction
+## [x] M2 — Lokal Navigation och World Interaction
 
 ### Mål
 
@@ -95,9 +95,9 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 - [x] M2A synliga blockerande creatures på upptagna tiles
 - [x] M2B bounded dynamic repath
 - [x] M2B progress-based stuck detection
-- [ ] stängda dörrar och use-interaction
-- [ ] enkel trappa/stege/teleport-transition
-- [ ] transitions verifieras genom observerat resultat
+- [x] stängda dörrar och use-interaction
+- [x] enkel trappa/stege/teleport-transition
+- [x] transitions verifieras genom observerat resultat
 
 ### M2A evidens — local walkability contract
 
@@ -114,7 +114,7 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 ### Kvarvarande issue-sized arbete
 
 - [x] M2B — lokal pathfinding, repath och stuck detection;
-- [ ] M2C — dörrar och enkla world transitions.
+- [x] M2C — dörrar och enkla world transitions.
 
 ### M2B evidens — bounded local pathfinding
 
@@ -127,6 +127,18 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 - [x] source commit `48db1fa1c`;
 - [x] slutreview: en blockerande inadmissible heuristic fixad; upprepad review utan blocker.
 
+### M2C evidens — doors and simple world transitions
+
+- [x] värdebaserade interaction- och transition-kontrakt med stabil signatur, explicita terminal states, ändliga retries och cappad backoff;
+- [x] vanliga dörrar använder ordinarie `Game::playerUseItem` och produktionens `Actions`/Lua-register; accepterad dispatch räknas inte som success utan observerad item- eller positionsändring;
+- [x] databasbackad 1638/1639-dörr verifierar transformation, fortsatt M2B-rutt, stale rejection, level denial, dynamisk doorway-blocker och full world/databas-cleanup;
+- [x] produktionens ladder-action verifierar verklig våningsändring, route invalidation, ny observation och spectator callback utan direkt Lua-callback eller positionsmutation;
+- [x] ordinary-player regression använder samma action-register och verifierar oförändrad dörrdispatch;
+- [x] fokuserad gate: build 0, unit 56/56, databasbackad integration 19/19, diff 0;
+- [x] source commit `9a757ec71`;
+- [x] rapportarkiv `/home/playerbots/workspace/playerbots/logs/codex-reports/20260731-212017-m2c-world-transitions.md`;
+- [x] slutreview: terminal `ReplanRequired`-defekt och direkt teleport-fixture fixade; upprepad komplett gate utan blocker.
+
 ### Acceptance
 
 - [x] bot navigerar från A till B runt statiska hinder;
@@ -134,7 +146,7 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 - [x] skadlig tile undviks när säkrare väg finns;
 - [x] misslyckad movement ger backoff, inte tight loop;
 - [x] bot teleporteras aldrig som vanlig unstuck-lösning;
-- [ ] tvåspelars spectator-fall ger korrekta callbacks.
+- [x] tvåspelars spectator-fall ger korrekta callbacks.
 
 ---
 
