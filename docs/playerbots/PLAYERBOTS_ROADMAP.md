@@ -45,7 +45,7 @@ Skapa en säker serverkontrollerad `Player` utan nätverksklient med korrekt log
 
 ---
 
-## [ ] M1 — Agent Runtime, Perception och Action Contracts
+## [x] M1 — Agent Runtime, Perception och Action Contracts
 
 ### Mål
 
