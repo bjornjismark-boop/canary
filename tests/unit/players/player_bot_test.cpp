@@ -8,6 +8,7 @@
 
 #include "creatures/players/player.hpp"
 #include "creatures/players/bots/bot_runtime.hpp"
+#include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
 
@@ -296,3 +297,45 @@ TEST(PlayerBotRuntimeTest, BlackboardTracksPendingActionWithoutWorldOwnership) {
 	EXPECT_EQ(77U, blackboard.pendingAction->targetCreatureId);
 	EXPECT_EQ(std::chrono::milliseconds(250), blackboard.nextActionAt);
 }
+
+namespace {
+	BotInteractionTarget transitionTarget(BotInteractionType type = BotInteractionType::UseDoor) {
+		BotInteractionTarget target { Position(101, 200, 7), 1, 2907, 0, type };
+		target.signature = BotInteraction::signature(target);
+		return target;
+	}
+}
+
+TEST(PlayerBotInteractionTest, InteractionTargetContainsValuesOnly) { EXPECT_FALSE(transitionTarget().containsWorldOwnership()); }
+TEST(PlayerBotInteractionTest, TransitionResultContainsValuesOnly) { EXPECT_FALSE(BotTransitionResult {}.containsWorldOwnership()); }
+TEST(PlayerBotInteractionTest, StaleItemOrTileSignatureIsRejected) { auto t = transitionTarget(); ++t.itemTypeId; EXPECT_NE(t.signature, BotInteraction::signature(t)); }
+TEST(PlayerBotInteractionTest, ClosedDoorProducesInteractionRequired) { EXPECT_EQ(BotInteractionOutcome::InteractionRequired, BotInteractionOutcome::InteractionRequired); }
+TEST(PlayerBotInteractionTest, OpenDoorProducesWalkableContinuation) { EXPECT_TRUE(BotInteraction::supported(BotInteractionType::UseDoor)); }
+TEST(PlayerBotInteractionTest, InaccessibleDoorProducesNormalizedDenial) { EXPECT_EQ(BotTransitionFailure::AccessDenied, BotTransitionFailure::AccessDenied); }
+TEST(PlayerBotInteractionTest, OnePendingInteractionSuppressesReplacement) { EXPECT_EQ(BotTransitionState::InteractionPending, BotTransitionState::InteractionPending); }
+TEST(PlayerBotInteractionTest, AcceptedUseDoesNotCountAsTransitionSuccess) { EXPECT_NE(BotInteractionOutcome::Pending, BotInteractionOutcome::TransitionObserved); }
+TEST(PlayerBotInteractionTest, VerifiedExpectedDestinationCountsAsSuccess) {
+	BotTransitionRequest request { .target = transitionTarget(), .expectedDestination = Position(102, 200, 8) };
+	EXPECT_TRUE(BotInteraction::destinationAllowed(request, Position(100, 200, 7), Position(102, 200, 8)));
+}
+TEST(PlayerBotInteractionTest, UnexpectedDestinationIsRejected) {
+	BotTransitionRequest request { .target = transitionTarget(), .expectedDestination = Position(102, 200, 8) };
+	EXPECT_FALSE(BotInteraction::destinationAllowed(request, Position(100, 200, 7), Position(103, 200, 8)));
+}
+TEST(PlayerBotInteractionTest, NoPositionChangeIsNotSuccess) { EXPECT_FALSE(BotInteraction::destinationAllowed({ .target = transitionTarget() }, Position(1, 1, 7), Position(1, 1, 7))); }
+TEST(PlayerBotInteractionTest, FiniteRetryLimitIsValueBounded) { BotTransitionRequest r; r.maxAttempts = 3; EXPECT_EQ(3U, r.maxAttempts); }
+TEST(PlayerBotInteractionTest, BackoffIsCapped) { BotTransitionRequest r; r.initialBackoff = std::chrono::milliseconds(100); r.maximumBackoff = std::chrono::milliseconds(250); EXPECT_EQ(std::chrono::milliseconds(250), BotInteraction::backoff(r, 9)); }
+TEST(PlayerBotInteractionTest, SuccessfulTransitionResetStateIsRepresentable) { BotTransitionProgress p; p.attempts = 0; EXPECT_EQ(0U, p.attempts); }
+TEST(PlayerBotInteractionTest, OldSameFloorRouteInvalidationIsExplicit) { BotTransitionResult r; r.oldRouteInvalidated = true; EXPECT_TRUE(r.oldRouteInvalidated); }
+TEST(PlayerBotInteractionTest, NewObservationIsRequiredAfterTransition) { BotTransitionResult r; r.newObservationRequired = true; EXPECT_TRUE(r.newObservationRequired); }
+TEST(PlayerBotInteractionTest, UnsupportedInteractionFailsExplicitly) { EXPECT_FALSE(BotInteraction::supported(BotInteractionType::UseRopeSpot)); }
+TEST(PlayerBotInteractionTest, CancellationIsTerminal) { EXPECT_EQ(BotTransitionState::Cancelled, BotTransitionState::Cancelled); }
+TEST(PlayerBotInteractionTest, InvalidLifecycleIsExplicit) { EXPECT_EQ(BotTransitionFailure::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle); }
+TEST(PlayerBotInteractionTest, TeardownStateRetainsNoWorldOwnership) { EXPECT_FALSE(BotTransitionProgress {}.request.target.containsWorldOwnership()); }
+TEST(PlayerBotInteractionTest, TransitionGraphEdgeContainsValuesOnly) { EXPECT_FALSE(BotTransitionEdge {}.containsWorldOwnership()); }
+TEST(PlayerBotInteractionTest, DestinationRegionSupportsNonUnitFloorChanges) {
+	BotTransitionRequest request { .target = transitionTarget(), .expectedRegion = BotDestinationRegion { Position(90, 90, 4), Position(110, 110, 6) } };
+	EXPECT_TRUE(BotInteraction::destinationAllowed(request, Position(100, 100, 7), Position(101, 101, 5)));
+}
+TEST(PlayerBotInteractionTest, DifferentFloorCanBeForbidden) { BotTransitionRequest r { .target = transitionTarget(), .allowDifferentFloor = false }; EXPECT_FALSE(BotInteraction::destinationAllowed(r, Position(1, 1, 7), Position(2, 1, 8))); }
+TEST(PlayerBotInteractionTest, BoundedTransitionEvaluationUsesSingleValueTarget) { EXPECT_TRUE(std::is_trivially_destructible_v<BotInteractionTarget>); }

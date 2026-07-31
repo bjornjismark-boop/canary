@@ -55,6 +55,7 @@ public:
 		return controller ? &controller->getBlackboard() : nullptr;
 	}
 	[[nodiscard]] const BotRouteProgress *getRouteProgress() const { return controller ? &controller->getRouteProgress() : nullptr; }
+	[[nodiscard]] const BotTransitionProgress *getTransitionProgress() const { return controller ? &controller->getTransitionProgress() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -71,6 +72,9 @@ private:
 	[[nodiscard]] BotRouteProgress startRoute(const Position &destination, std::chrono::milliseconds now, BotRouteLimits limits);
 	[[nodiscard]] BotRouteProgress advanceRoute(std::chrono::milliseconds now);
 	[[nodiscard]] BotRouteProgress cancelRoute();
+	[[nodiscard]] BotTransitionResult startTransition(const BotTransitionRequest &request, std::chrono::milliseconds now);
+	[[nodiscard]] BotTransitionResult advanceTransition(std::chrono::milliseconds now);
+	[[nodiscard]] BotTransitionResult cancelTransition();
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

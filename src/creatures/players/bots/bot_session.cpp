@@ -169,6 +169,21 @@ BotRouteProgress BotSession::cancelRoute() {
 	return controller->cancelRoute();
 }
 
+BotTransitionResult BotSession::startTransition(const BotTransitionRequest &request, std::chrono::milliseconds now) {
+	if (state != BotSessionState::Placed || !controller) return { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed };
+	return controller->startTransition(request, now);
+}
+
+BotTransitionResult BotSession::advanceTransition(std::chrono::milliseconds now) {
+	if (state != BotSessionState::Placed || !controller) return { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed };
+	return controller->advanceTransition(now);
+}
+
+BotTransitionResult BotSession::cancelTransition() {
+	if (state != BotSessionState::Placed || !controller) return { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed };
+	return controller->cancelTransition();
+}
+
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
 		return false;
@@ -242,7 +257,7 @@ bool BotSession::retryPendingSave() {
 }
 
 void BotSession::finishClose() {
-	if (controller) (void)controller->cancelRoute();
+	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); }
 	controller.reset();
 	player.reset();
 	state = BotSessionState::Closed;

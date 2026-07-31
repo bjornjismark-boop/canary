@@ -26,7 +26,11 @@ public:
 
 	bool initState() override {
 		luaState = luaL_newstate();
-		return luaState != nullptr;
+		if (!luaState) {
+			return false;
+		}
+		Lua::load(luaState);
+		return true;
 	}
 
 	bool reInitState() override {

@@ -15,9 +15,32 @@
 #include "io/iologindata.hpp"
 #include "io/functions/iologindata_load_player.hpp"
 #include "lib/logging/in_memory_logger.hpp"
+#include "lua/creature/actions.hpp"
+#include "lua/scripts/scripts.hpp"
 #include "test_database.hpp"
 
 namespace {
+	class ProductionTransitionActionFixture final {
+	public:
+		ProductionTransitionActionFixture() {
+			static const bool coreLoaded = g_scripts().loadEventSchedulerScripts("data/core.lua");
+			g_actions().clear();
+			loaded = coreLoaded
+				&& g_scripts().loadEventSchedulerScripts("data/scripts/actions/doors/custom_door.lua")
+				&& g_scripts().loadEventSchedulerScripts("data/scripts/actions/doors/level_door.lua")
+				&& g_scripts().loadEventSchedulerScripts("data/scripts/actions/items/ladder_up.lua");
+		}
+
+		~ProductionTransitionActionFixture() {
+			g_actions().clear();
+		}
+
+		[[nodiscard]] bool isLoaded() const { return loaded; }
+
+	private:
+		bool loaded = false;
+	};
+
 	class RemovalCountingCreature final : public Creature {
 	public:
 		const std::string &getName() const override { return name; }
@@ -36,8 +59,16 @@ namespace {
 			}
 		}
 
+		void onCreatureMove(const std::shared_ptr<Creature> &creature, const std::shared_ptr<Tile> &newTile, const Position &newPos, const std::shared_ptr<Tile> &oldTile, const Position &oldPos, bool teleport) override {
+			Creature::onCreatureMove(creature, newTile, newPos, oldTile, oldPos, teleport);
+			if (creature == observedCreature.lock()) {
+				++observedMovementCount;
+			}
+		}
+
 		std::weak_ptr<Creature> observedCreature;
 		size_t observedRemovalCount = 0;
+		size_t observedMovementCount = 0;
 
 	private:
 		std::string name = "PlayerBotRemovalObserver";
@@ -45,7 +76,7 @@ namespace {
 
 	class PlayerBotDatabaseFixture final {
 	public:
-		explicit PlayerBotDatabaseFixture(Database &database) :
+		explicit PlayerBotDatabaseFixture(Database &database, std::optional<Position> requestedStart = std::nullopt) :
 			database(database) {
 			TestDatabase::init();
 			TestDatabase::requireDisposableDatabase(database);
@@ -55,11 +86,11 @@ namespace {
 				std::chrono::steady_clock::now().time_since_epoch().count() & 0x0FFFFFFF
 			) + sequence.fetch_add(1);
 			name = fmt::format("PlayerBot{}", suffix);
-			start = Position(
+			start = requestedStart.value_or(Position(
 				static_cast<uint16_t>(30000U + suffix % 1000U),
 				static_cast<uint16_t>(30000U + (suffix / 1000U) % 1000U),
 				7
-			);
+			));
 
 			const auto escapedName = database.escapeString(name);
 			if (!database.executeQuery(fmt::format(
@@ -303,6 +334,198 @@ TEST(PlayerBotIntegrationTest, BoundedRouteExecutesRepathsAndCancelsWithRealWorl
 	EXPECT_EQ(BotRouteState::Cancelled, manager.cancelRoute(fixture.name).state);
 	EXPECT_TRUE(manager.logout(fixture.name, false));
 	EXPECT_EQ(nullptr, session->getRouteProgress());
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, ProductionLadderTransitionIsObservedAndInvalidatesOldRoute) {
+	ProductionTransitionActionFixture actionFixture;
+	ASSERT_TRUE(actionFixture.isLoaded());
+	PlayerBotDatabaseFixture fixture(g_database());
+	PlayerBotDatabaseFixture spectatorFixture(g_database(), Position(fixture.start.x, fixture.start.y + 1, fixture.start.z));
+	const Position ladderPosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	const Position destination(ladderPosition.x, ladderPosition.y + 1, ladderPosition.z - 1);
+	createWalkableTile(fixture.start);
+	createWalkableTile(spectatorFixture.start);
+	createWalkableTile(ladderPosition);
+	createWalkableTile(destination);
+	const auto ladderTile = g_game().map.getTile(ladderPosition);
+	const auto ladder = Item::CreateItem(1948);
+	ASSERT_NE(nullptr, ladder);
+	ladderTile->internalAddThing(ladder);
+
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	const auto spectatorSession = loginBotOrReport(manager, spectatorFixture.name);
+	ASSERT_NE(nullptr, spectatorSession);
+	const auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	auto callbackObserver = std::make_shared<RemovalCountingCreature>();
+	callbackObserver->setID();
+	callbackObserver->observedCreature = player;
+	const Position callbackObserverPosition(fixture.start.x - 1, fixture.start.y, fixture.start.z);
+	createWalkableTile(callbackObserverPosition);
+	ASSERT_TRUE(g_game().placeCreature(callbackObserver, callbackObserverPosition, false, true));
+	ASSERT_EQ(BotRouteState::Ready, manager.startRoute(fixture.name, ladderPosition, std::chrono::milliseconds(100)).state);
+	BotInteractionTarget target { ladderPosition, static_cast<uint8_t>(ladderTile->getThingIndex(ladder)), 1948, 0, BotInteractionType::UseLadder };
+	target.signature = BotInteraction::signature(target);
+	BotTransitionRequest request { .target = target, .expectedDestination = destination, .maxAttempts = 2, .timeout = std::chrono::milliseconds(50) };
+	const auto accepted = manager.startTransition(fixture.name, request, std::chrono::milliseconds(200));
+	EXPECT_EQ(BotTransitionState::AwaitingTransition, accepted.state);
+	EXPECT_EQ(destination, player->getPosition());
+	EXPECT_GT(callbackObserver->observedMovementCount, 0U);
+	EXPECT_EQ(spectatorFixture.start, std::const_pointer_cast<Player>(spectatorSession->getPlayer())->getPosition());
+	const auto verified = manager.advanceTransition(fixture.name, std::chrono::milliseconds(201));
+	EXPECT_EQ(BotTransitionState::Completed, verified.state);
+	EXPECT_EQ(BotInteractionOutcome::TransitionObserved, verified.outcome);
+	EXPECT_TRUE(verified.oldRouteInvalidated);
+	EXPECT_TRUE(verified.newObservationRequired);
+	ASSERT_NE(nullptr, session->getRouteProgress());
+	EXPECT_EQ(BotRouteState::ReplanRequired, session->getRouteProgress()->state);
+	const auto fresh = BotPerception::observe(player);
+	ASSERT_TRUE(fresh.has_value());
+	EXPECT_EQ(destination, fresh->position);
+	EXPECT_EQ(BotTransitionState::Cancelled, manager.cancelTransition(fixture.name).state);
+	ASSERT_TRUE(g_game().removeCreature(callbackObserver, true));
+	callbackObserver.reset();
+	ladderTile->removeThing(ladder, 1);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	EXPECT_TRUE(manager.logout(spectatorFixture.name, false));
+	EXPECT_EQ(nullptr, session->getTransitionProgress());
+	ASSERT_TRUE(fixture.cleanup());
+	ASSERT_TRUE(spectatorFixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+	EXPECT_FALSE(spectatorFixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, ClosedDoorUsesOrdinaryActionAndRequiresObservedTransformation) {
+	ProductionTransitionActionFixture actionFixture;
+	ASSERT_TRUE(actionFixture.isLoaded());
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position doorPosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	const Position destination(fixture.start.x + 2, fixture.start.y, fixture.start.z);
+	createWalkableTile(fixture.start);
+	createWalkableTile(doorPosition);
+	createWalkableTile(destination);
+	const auto doorTile = g_game().map.getTile(doorPosition);
+	const auto door = Item::CreateItem(1638);
+	ASSERT_NE(nullptr, door);
+	ASSERT_NE(nullptr, door->getDoor());
+	doorTile->internalAddThing(door);
+	const auto stack = static_cast<uint8_t>(doorTile->getThingIndex(door));
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	BotInteractionTarget target { doorPosition, stack, 1638, 0, BotInteractionType::UseDoor };
+	target.signature = BotInteraction::signature(target);
+	BotTransitionRequest request { .target = target, .maxAttempts = 2, .timeout = std::chrono::milliseconds(50) };
+	const auto accepted = manager.startTransition(fixture.name, request, std::chrono::milliseconds(100));
+	EXPECT_EQ(BotTransitionState::AwaitingTransition, accepted.state);
+	const auto opened = manager.advanceTransition(fixture.name, std::chrono::milliseconds(101));
+	EXPECT_EQ(BotTransitionState::ReplanRequired, opened.state);
+	EXPECT_EQ(BotInteractionOutcome::Succeeded, opened.outcome);
+	std::shared_ptr<Item> transformed;
+	for (const auto &candidate : *doorTile->getItemList()) if (candidate && candidate->getDoor()) { transformed = candidate; break; }
+	ASSERT_NE(nullptr, transformed);
+	EXPECT_EQ(1639, transformed->getID());
+	EXPECT_EQ(fixture.start, std::const_pointer_cast<Player>(session->getPlayer())->getPosition());
+
+	ASSERT_EQ(BotRouteState::Ready, manager.startRoute(fixture.name, destination, std::chrono::milliseconds(200)).state);
+	BotRouteProgress continued;
+	for (uint32_t step = 1; step <= 8 && continued.state != BotRouteState::Arrived; ++step) {
+		continued = manager.advanceRoute(fixture.name, std::chrono::milliseconds(200 + step * 1000));
+	}
+	EXPECT_EQ(BotRouteState::Arrived, continued.state);
+	EXPECT_EQ(destination, std::const_pointer_cast<Player>(session->getPlayer())->getPosition());
+
+	EXPECT_EQ(BotTransitionState::Cancelled, manager.cancelTransition(fixture.name).state);
+	const auto stale = manager.startTransition(fixture.name, request, std::chrono::milliseconds(300));
+	EXPECT_EQ(BotTransitionState::Failed, stale.state);
+	EXPECT_EQ(BotInteractionOutcome::StaleObservation, stale.outcome);
+	doorTile->removeThing(transformed, 1);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, DoorDenialAndDynamicDoorwayBlockerRemainAuthoritative) {
+	ProductionTransitionActionFixture actionFixture;
+	ASSERT_TRUE(actionFixture.isLoaded());
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position customDoorPosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	const Position levelDoorPosition(fixture.start.x, fixture.start.y + 1, fixture.start.z);
+	createWalkableTile(fixture.start);
+	createWalkableTile(customDoorPosition);
+	createWalkableTile(levelDoorPosition);
+	const auto customDoorTile = g_game().map.getTile(customDoorPosition);
+	const auto levelDoorTile = g_game().map.getTile(levelDoorPosition);
+	const auto customDoor = Item::CreateItem(1638);
+	const auto levelDoor = Item::CreateItem(1646);
+	ASSERT_NE(nullptr, customDoor);
+	ASSERT_NE(nullptr, levelDoor);
+	levelDoor->setAttribute(ItemAttribute_t::ACTIONID, uint16_t { 1100 });
+	customDoorTile->internalAddThing(customDoor);
+	levelDoorTile->internalAddThing(levelDoor);
+
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	BotInteractionTarget levelTarget { levelDoorPosition, static_cast<uint8_t>(levelDoorTile->getThingIndex(levelDoor)), 1646, 0, BotInteractionType::UseDoor };
+	levelTarget.signature = BotInteraction::signature(levelTarget);
+	BotTransitionRequest levelRequest { .target = levelTarget, .maxAttempts = 1, .timeout = std::chrono::milliseconds(1) };
+	const auto levelAccepted = manager.startTransition(fixture.name, levelRequest, std::chrono::milliseconds(100));
+	EXPECT_EQ(BotTransitionState::AwaitingTransition, levelAccepted.state);
+	EXPECT_EQ(BotInteractionOutcome::Pending, levelAccepted.outcome);
+	EXPECT_EQ(1646, levelDoor->getID());
+	const auto denied = manager.advanceTransition(fixture.name, std::chrono::milliseconds(101));
+	EXPECT_EQ(BotTransitionState::Failed, denied.state);
+	EXPECT_EQ(BotInteractionOutcome::AccessDenied, denied.outcome);
+	EXPECT_EQ(1646, levelDoor->getID());
+
+	EXPECT_EQ(BotTransitionState::Cancelled, manager.cancelTransition(fixture.name).state);
+	auto blocker = std::make_shared<RemovalCountingCreature>();
+	blocker->setID();
+	ASSERT_TRUE(g_game().placeCreature(blocker, customDoorPosition, false, true));
+	BotInteractionTarget customTarget { customDoorPosition, static_cast<uint8_t>(customDoorTile->getThingIndex(customDoor)), 1638, 0, BotInteractionType::UseDoor };
+	customTarget.signature = BotInteraction::signature(customTarget);
+	BotTransitionRequest customRequest { .target = customTarget, .maxAttempts = 1, .timeout = std::chrono::milliseconds(1) };
+	const auto blockerAccepted = manager.startTransition(fixture.name, customRequest, std::chrono::milliseconds(200));
+	EXPECT_EQ(BotTransitionState::AwaitingTransition, blockerAccepted.state);
+	EXPECT_EQ(BotInteractionOutcome::Pending, blockerAccepted.outcome);
+	EXPECT_EQ(1638, customDoor->getID());
+	const auto blocked = manager.advanceTransition(fixture.name, std::chrono::milliseconds(201));
+	EXPECT_EQ(BotTransitionState::Failed, blocked.state);
+	EXPECT_NE(BotInteractionOutcome::Succeeded, blocked.outcome);
+	EXPECT_EQ(1638, customDoor->getID());
+
+	ASSERT_TRUE(g_game().removeCreature(blocker, true));
+	blocker.reset();
+	customDoorTile->removeThing(customDoor, 1);
+	levelDoorTile->removeThing(levelDoor, 1);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, OrdinaryPlayerDoorUseStillDispatchesThroughProductionAction) {
+	ProductionTransitionActionFixture actionFixture;
+	ASSERT_TRUE(actionFixture.isLoaded());
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position doorPosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	createWalkableTile(fixture.start);
+	createWalkableTile(doorPosition);
+	const auto doorTile = g_game().map.getTile(doorPosition);
+	const auto door = Item::CreateItem(1638);
+	ASSERT_NE(nullptr, door);
+	doorTile->internalAddThing(door);
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	const auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	g_game().playerUseItem(player->getID(), doorPosition, static_cast<uint8_t>(doorTile->getThingIndex(door)), 0, 1638);
+	EXPECT_EQ(1639, door->getID());
+	doorTile->removeThing(door, 1);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
 	ASSERT_TRUE(fixture.cleanup());
 	EXPECT_FALSE(fixture.hasCommittedRows());
 }

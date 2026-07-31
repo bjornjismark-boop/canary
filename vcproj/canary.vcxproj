@@ -49,6 +49,7 @@
     <ClInclude Include="..\src\creatures\players\storages\storages.hpp" />
     <ClInclude Include="..\src\creatures\players\player.hpp" />
     <ClInclude Include="..\src\creatures\players\bots\bot_controller.hpp" />
+	<ClInclude Include="..\src\creatures\players\bots\bot_interaction.hpp" />
     <ClInclude Include="..\src\creatures\players\bots\bot_manager.hpp" />
 	<ClInclude Include="..\src\creatures\players\bots\bot_navigation.hpp" />
 	<ClInclude Include="..\src\creatures\players\bots\bot_runtime.hpp" />
@@ -297,6 +298,7 @@
     <ClCompile Include="..\src\creatures\players\storages\storages.cpp" />
     <ClCompile Include="..\src\creatures\players\player.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_controller.cpp" />
+	<ClCompile Include="..\src\creatures\players\bots\bot_interaction.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_manager.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_navigation.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_runtime.cpp" />

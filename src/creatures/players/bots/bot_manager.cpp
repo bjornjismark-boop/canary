@@ -154,3 +154,18 @@ BotRouteProgress BotManager::cancelRoute(const std::string &name) {
 	const auto it = sessions.find(asLowerCaseString(name));
 	return it == sessions.end() ? BotRouteProgress { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle } : it->second->cancelRoute();
 }
+
+BotTransitionResult BotManager::startTransition(const std::string &name, const BotTransitionRequest &request, std::chrono::milliseconds now) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotTransitionResult { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed } : it->second->startTransition(request, now);
+}
+
+BotTransitionResult BotManager::advanceTransition(const std::string &name, std::chrono::milliseconds now) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotTransitionResult { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed } : it->second->advanceTransition(now);
+}
+
+BotTransitionResult BotManager::cancelTransition(const std::string &name) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotTransitionResult { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed } : it->second->cancelTransition();
+}

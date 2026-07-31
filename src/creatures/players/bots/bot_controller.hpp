@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
@@ -37,6 +38,10 @@ public:
 	[[nodiscard]] BotRouteProgress advanceRoute(std::chrono::milliseconds now);
 	[[nodiscard]] BotRouteProgress cancelRoute();
 	[[nodiscard]] const BotRouteProgress &getRouteProgress() const { return routeProgress; }
+	[[nodiscard]] BotTransitionResult startTransition(const BotTransitionRequest &request, std::chrono::milliseconds now);
+	[[nodiscard]] BotTransitionResult advanceTransition(std::chrono::milliseconds now);
+	[[nodiscard]] BotTransitionResult cancelTransition();
+	[[nodiscard]] const BotTransitionProgress &getTransitionProgress() const { return transitionProgress; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -54,4 +59,5 @@ private:
 	BotRouteLimits routeLimits;
 	BotRouteResult route;
 	BotRouteProgress routeProgress;
+	BotTransitionProgress transitionProgress;
 };

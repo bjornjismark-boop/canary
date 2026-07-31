@@ -24,6 +24,7 @@ target_sources(
             npcs/spawns/spawn_npc.cpp
             players/animus_mastery/animus_mastery.cpp
             players/bots/bot_controller.cpp
+			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp
             players/bots/bot_manager.cpp
             players/bots/bot_manager.hpp

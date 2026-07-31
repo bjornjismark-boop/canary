@@ -41,6 +41,9 @@ public:
 	[[nodiscard]] BotRouteProgress startRoute(const std::string &name, const Position &destination, std::chrono::milliseconds now, BotRouteLimits limits = {});
 	[[nodiscard]] BotRouteProgress advanceRoute(const std::string &name, std::chrono::milliseconds now);
 	[[nodiscard]] BotRouteProgress cancelRoute(const std::string &name);
+	[[nodiscard]] BotTransitionResult startTransition(const std::string &name, const BotTransitionRequest &request, std::chrono::milliseconds now);
+	[[nodiscard]] BotTransitionResult advanceTransition(const std::string &name, std::chrono::milliseconds now);
+	[[nodiscard]] BotTransitionResult cancelTransition(const std::string &name);
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

@@ -9,6 +9,7 @@
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/player.hpp"
 #include "game/game.hpp"
+#include "lua/creature/actions.hpp"
 #include "lib/logging/log_with_spd_log.hpp"
 
 BotController::BotController(Game &game, const std::shared_ptr<Player> &player, BotRuntimeLimits limits, DecisionLog decisionLog) :
@@ -287,4 +288,138 @@ BotRouteProgress BotController::cancelRoute() {
 	routeProgress.state = BotRouteState::Cancelled;
 	routeProgress.reason = BotRouteReason::Cancelled;
 	return routeProgress;
+}
+
+BotTransitionResult BotController::startTransition(const BotTransitionRequest &request, std::chrono::milliseconds now) {
+	if (transitionProgress.state != BotTransitionState::Idle
+		&& transitionProgress.state != BotTransitionState::Completed
+		&& transitionProgress.state != BotTransitionState::ReplanRequired
+		&& transitionProgress.state != BotTransitionState::Failed
+		&& transitionProgress.state != BotTransitionState::Cancelled) {
+		return { { BotInteractionOutcome::Pending, BotTransitionFailure::None, 0, {}, {}, transitionProgress.attempts }, transitionProgress.state };
+	}
+	const auto controlledPlayer = player.lock();
+	const auto observation = BotPerception::observe(controlledPlayer);
+	if (!observation) return { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, BotTransitionState::Failed };
+	if (!BotInteraction::supported(request.target.category)) return { { BotInteractionOutcome::UnsupportedInteraction, BotTransitionFailure::UnsupportedInteraction }, BotTransitionState::Failed };
+	if (request.target.signature != BotInteraction::signature(request.target)) return { { BotInteractionOutcome::StaleObservation, BotTransitionFailure::StaleObservation }, BotTransitionState::Failed };
+	transitionProgress = { .state = BotTransitionState::InteractionPending, .request = request, .positionBefore = observation->position, .startedAt = now };
+	return advanceTransition(now);
+}
+
+BotTransitionResult BotController::advanceTransition(std::chrono::milliseconds now) {
+	auto &progress = transitionProgress;
+	if (progress.state == BotTransitionState::Completed || progress.state == BotTransitionState::ReplanRequired || progress.state == BotTransitionState::Failed || progress.state == BotTransitionState::Cancelled) return progress.result;
+	const auto controlledPlayer = player.lock();
+	const auto observation = BotPerception::observe(controlledPlayer);
+	if (!observation) {
+		progress.state = BotTransitionState::Failed;
+		progress.result = { { BotInteractionOutcome::InvalidLifecycle, BotTransitionFailure::InvalidLifecycle }, progress.state };
+		return progress.result;
+	}
+	if (progress.state == BotTransitionState::Backoff) {
+		if (now < progress.nextAttemptAt) return progress.result;
+		progress.state = BotTransitionState::InteractionPending;
+	}
+	if (progress.state == BotTransitionState::AwaitingTransition) {
+		progress.state = BotTransitionState::VerifyingResult;
+		const Position after = observation->position;
+		if (after != progress.positionBefore) {
+			const bool allowed = BotInteraction::destinationAllowed(progress.request, progress.positionBefore, after);
+			progress.state = allowed ? BotTransitionState::Completed : BotTransitionState::Failed;
+			progress.result = { {
+				allowed ? BotInteractionOutcome::TransitionObserved : BotInteractionOutcome::UnexpectedDestination,
+				allowed ? BotTransitionFailure::None : BotTransitionFailure::UnexpectedDestination,
+				progress.result.worldReturnValue, progress.positionBefore, after, progress.attempts
+			}, progress.state, true, true };
+			route = {};
+			routeProgress = { .state = BotRouteState::ReplanRequired, .reason = BotRouteReason::StaleTopology, .actualPosition = after };
+			return progress.result;
+		}
+		if (progress.request.target.category == BotInteractionType::UseDoor) {
+			const auto tile = game.map.getTile(progress.request.target.position);
+			std::shared_ptr<Item> item;
+			if (tile && tile->getItemList()) {
+				for (const auto &candidate : *tile->getItemList()) if (candidate && candidate->getDoor()) { item = candidate; break; }
+			}
+			if (item && item->getID() != progress.request.target.itemTypeId && item->getDoor()) {
+				progress.state = BotTransitionState::ReplanRequired;
+				progress.result = { { BotInteractionOutcome::Succeeded, BotTransitionFailure::None, progress.result.worldReturnValue, progress.positionBefore, after, progress.attempts }, progress.state, true, true };
+				route = {};
+				routeProgress = { .state = BotRouteState::ReplanRequired, .reason = BotRouteReason::StaleTopology, .actualPosition = after };
+				return progress.result;
+			}
+		}
+		if (now - progress.startedAt < progress.request.timeout) return progress.result;
+		if (progress.attempts >= progress.request.maxAttempts) {
+			progress.state = BotTransitionState::Failed;
+			const bool doorDenied = progress.request.target.category == BotInteractionType::UseDoor;
+			progress.result = { { doorDenied ? BotInteractionOutcome::AccessDenied : BotInteractionOutcome::RetryExhausted, doorDenied ? BotTransitionFailure::AccessDenied : BotTransitionFailure::RetryExhausted, progress.result.worldReturnValue, progress.positionBefore, after, progress.attempts }, progress.state };
+			return progress.result;
+		}
+		const auto delay = BotInteraction::backoff(progress.request, progress.attempts);
+		progress.state = BotTransitionState::Backoff;
+		progress.nextAttemptAt = now + delay;
+		progress.result.outcome = BotInteractionOutcome::RetryScheduled;
+		progress.result.failure = BotTransitionFailure::TimedOut;
+		progress.result.retryAfter = delay;
+		return progress.result;
+	}
+
+	const auto &target = progress.request.target;
+	if (target.signature != BotInteraction::signature(target)) {
+		progress.state = BotTransitionState::Failed;
+		progress.result = { { BotInteractionOutcome::StaleObservation, BotTransitionFailure::StaleObservation }, progress.state };
+		return progress.result;
+	}
+	if (progress.request.requiredItemTypeId && static_cast<const Cylinder &>(*controlledPlayer).getItemTypeCount(progress.request.requiredItemTypeId) == 0) {
+		progress.state = BotTransitionState::Failed;
+		progress.result = { { BotInteractionOutcome::MissingRequiredItem, BotTransitionFailure::MissingRequiredItem }, progress.state };
+		return progress.result;
+	}
+	const Position before = controlledPlayer->getPosition();
+	ReturnValue worldResult = RETURNVALUE_NOTPOSSIBLE;
+	if (target.category == BotInteractionType::WalkOntoTransition) {
+		if (!Position::areInRange<1, 1, 0>(before, target.position)) {
+			progress.state = BotTransitionState::Failed;
+			progress.result = { { BotInteractionOutcome::Blocked, BotTransitionFailure::Blocked }, progress.state };
+			return progress.result;
+		}
+		worldResult = game.internalMoveCreature(controlledPlayer, getDirectionTo(before, target.position));
+	} else {
+		const auto targetTile = game.map.getTile(target.position);
+		std::shared_ptr<Item> item;
+		if (targetTile && targetTile->getItemList()) {
+			for (const auto &candidate : *targetTile->getItemList()) if (candidate && candidate->getID() == target.itemTypeId) { item = candidate; break; }
+		}
+		if (!item || item->getID() != target.itemTypeId) {
+			progress.state = BotTransitionState::Failed;
+			progress.result = { { BotInteractionOutcome::StaleObservation, BotTransitionFailure::StaleObservation }, progress.state };
+			return progress.result;
+		}
+		if (target.category == BotInteractionType::UseDoor && !item->getDoor()) {
+			progress.state = BotTransitionState::Failed;
+			progress.result = { { BotInteractionOutcome::InvalidTarget, BotTransitionFailure::InvalidTarget }, progress.state };
+			return progress.result;
+		}
+		worldResult = g_actions().canUse(controlledPlayer, target.position);
+		if (worldResult == RETURNVALUE_NOERROR) worldResult = g_actions().canUse(controlledPlayer, target.position, item);
+		if (worldResult == RETURNVALUE_NOERROR) game.playerUseItem(controlledPlayer->getID(), target.position, target.stackPosition, 0, target.itemTypeId);
+	}
+	++progress.attempts;
+	progress.startedAt = now;
+	progress.positionBefore = before;
+	progress.state = worldResult == RETURNVALUE_NOERROR ? BotTransitionState::AwaitingTransition : BotTransitionState::Failed;
+	progress.result = { {
+		worldResult == RETURNVALUE_NOERROR ? BotInteractionOutcome::Pending : BotInteractionOutcome::WorldRejected,
+		worldResult == RETURNVALUE_NOERROR ? BotTransitionFailure::NoTransition : BotTransitionFailure::WorldRejected,
+		static_cast<uint16_t>(worldResult), before, controlledPlayer->getPosition(), progress.attempts
+	}, progress.state };
+	return progress.result;
+}
+
+BotTransitionResult BotController::cancelTransition() {
+	transitionProgress.state = BotTransitionState::Cancelled;
+	transitionProgress.result = { { BotInteractionOutcome::Cancelled, BotTransitionFailure::Cancelled }, BotTransitionState::Cancelled };
+	return transitionProgress.result;
 }
