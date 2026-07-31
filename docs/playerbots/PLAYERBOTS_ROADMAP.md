@@ -89,12 +89,12 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 
 - [x] M2A gångbarhetsbedömning med normaliserade värderesultat
 - [x] M2A åtta riktningar och lokala positionsdelta
-- [ ] lokal pathfinding
+- [x] M2B bounded local pathfinding
 - [x] M2A deterministisk diagonal kostnad enligt Canarys kostnadsskala
 - [x] M2A riskkostnad för skadliga fields
 - [x] M2A synliga blockerande creatures på upptagna tiles
-- [ ] repath
-- [ ] stuck detection
+- [x] M2B bounded dynamic repath
+- [x] M2B progress-based stuck detection
 - [ ] stängda dörrar och use-interaction
 - [ ] enkel trappa/stege/teleport-transition
 - [ ] transitions verifieras genom observerat resultat
@@ -113,16 +113,27 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 
 ### Kvarvarande issue-sized arbete
 
-- [ ] M2B — lokal pathfinding, repath och stuck detection;
+- [x] M2B — lokal pathfinding, repath och stuck detection;
 - [ ] M2C — dörrar och enkla world transitions.
+
+### M2B evidens — bounded local pathfinding
+
+- [x] värdebaserad A* över endast botens 17x13-observation, med deterministisk tie-break och explicita nod-, längd- och operationsbudgetar;
+- [x] samma-våningsrutter använder M2A:s cardinal-, diagonal- och hazardkostnader och exekveras ett exakt destinationssteg i taget genom M1/M2A-validering;
+- [x] tile-signaturer och statisk topologirevision invalidierar stale routes; synliga dynamiska blockerare ger begränsad repath med deterministiskt cappad backoff;
+- [x] faktisk position jämförs mot expected origin/next; no-progress är evidensbaserad, begränsad och återställs efter framsteg;
+- [x] terminala arrived/failed/cancelled states, Placed-lifecycle gate och teardown utan schemalagda callbacks eller world ownership;
+- [x] fokuserad gate: build 0, unit 32/32, databasbackad integration 15/15, diff 0;
+- [x] source commit `48db1fa1c`;
+- [x] slutreview: en blockerande inadmissible heuristic fixad; upprepad review utan blocker.
 
 ### Acceptance
 
-- [ ] bot navigerar från A till B runt statiska hinder;
-- [ ] dynamisk blockerare orsakar repath;
-- [ ] skadlig tile undviks när säkrare väg finns;
-- [ ] misslyckad movement ger backoff, inte tight loop;
-- [ ] bot teleporteras aldrig som vanlig unstuck-lösning;
+- [x] bot navigerar från A till B runt statiska hinder;
+- [x] dynamisk blockerare orsakar repath;
+- [x] skadlig tile undviks när säkrare väg finns;
+- [x] misslyckad movement ger backoff, inte tight loop;
+- [x] bot teleporteras aldrig som vanlig unstuck-lösning;
 - [ ] tvåspelars spectator-fall ger korrekta callbacks.
 
 ---
