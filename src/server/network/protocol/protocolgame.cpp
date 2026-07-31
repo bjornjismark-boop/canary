@@ -1040,6 +1040,11 @@ void ProtocolGame::login(const std::string &name, uint32_t accountId, OperatingS
 		player->loginProtectionTime = OTSYS_TIME() + g_configManager().getNumber(LOGIN_PROTECTION_TIME);
 		acceptPackets = true;
 	} else {
+		if (foundPlayer->isBotControlled()) {
+			disconnectClient("This character is already logged in.");
+			return;
+		}
+
 		if (eventConnect != 0 || !g_configManager().getBoolean(REPLACE_KICK_ON_LOGIN)) {
 			// Already trying to connect
 			disconnectClient("You are already logged in.");

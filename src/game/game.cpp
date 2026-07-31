@@ -1534,6 +1534,37 @@ bool Game::placeCreature(const std::shared_ptr<Creature> &creature, const Positi
 }
 
 bool Game::removeCreature(const std::shared_ptr<Creature> &creature, bool isLogout /* = true*/) {
+	return removeCreatureInternal(creature, isLogout, true);
+}
+
+ManagedPlayerRemovalResult Game::removeManagedPlayer(const std::shared_ptr<Player> &player, bool isLogout, const std::function<bool(const std::shared_ptr<Player> &)> &saveOperation) {
+	if (!player || player->isRemoved() || !player->getParent() || !player->getTile()) {
+		return ManagedPlayerRemovalResult::RemovalFailed;
+	}
+	if (!removeCreatureInternal(player, isLogout, false)) {
+		return ManagedPlayerRemovalResult::RemovalFailed;
+	}
+
+	if (!saveOperation) {
+		player->setOnline(false);
+		return ManagedPlayerRemovalResult::Complete;
+	}
+
+	try {
+		const bool saved = saveOperation(player);
+		player->setOnline(false);
+		return saved ? ManagedPlayerRemovalResult::Complete : ManagedPlayerRemovalResult::RemovedPendingSave;
+	} catch (const std::exception &exception) {
+		player->setOnline(false);
+		g_logger().error("[Game::removeManagedPlayer] Failed to save removed managed player '{}': {}", player->getName(), exception.what());
+	} catch (...) {
+		player->setOnline(false);
+		g_logger().error("[Game::removeManagedPlayer] Failed to save removed managed player '{}' with an unknown exception", player->getName());
+	}
+	return ManagedPlayerRemovalResult::RemovedPendingSave;
+}
+
+bool Game::removeCreatureInternal(const std::shared_ptr<Creature> &creature, bool isLogout, bool notifyRemovedPlayer) {
 	metrics::method_latency measure(__METRICS_METHOD_NAME__);
 	if (!creature || creature->isRemoved()) {
 		return false;
@@ -1573,6 +1604,10 @@ bool Game::removeCreature(const std::shared_ptr<Creature> &creature, bool isLogo
 
 		// event method
 		for (const auto &spectator : spectators) {
+			if (!notifyRemovedPlayer && spectator == creature) {
+				creature->getPlayer()->prepareManagedRemoval(isLogout);
+				continue;
+			}
 			spectator->onRemoveCreature(creature, isLogout);
 		}
 	}

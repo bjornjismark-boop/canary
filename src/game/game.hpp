@@ -42,6 +42,12 @@ class Mounts;
 class AttachedEffects;
 class Spectators;
 class Player;
+
+enum class ManagedPlayerRemovalResult : uint8_t {
+	RemovalFailed,
+	RemovedPendingSave,
+	Complete,
+};
 class Account;
 class TeamFinder;
 class NetworkMessage;
@@ -180,6 +186,11 @@ public:
 	bool placeCreature(const std::shared_ptr<Creature> &creature, const Position &pos, bool extendedPos = false, bool force = false);
 
 	bool removeCreature(const std::shared_ptr<Creature> &creature, bool isLogout = true);
+	ManagedPlayerRemovalResult removeManagedPlayer(
+		const std::shared_ptr<Player> &player,
+		bool isLogout,
+		const std::function<bool(const std::shared_ptr<Player> &)> &saveOperation = {}
+	);
 
 	/**
 	 * Adds a creature to the periodic think/check list.
@@ -766,6 +777,7 @@ public:
 	std::shared_ptr<Container> findManagedContainer(const std::shared_ptr<Player> &player, bool &fallbackConsumed, ObjectCategory_t category, bool isLootContainer);
 
 private:
+	bool removeCreatureInternal(const std::shared_ptr<Creature> &creature, bool isLogout, bool notifyRemovedPlayer);
 	std::map<uint16_t, Achievement> m_achievements;
 	std::map<std::string, uint16_t> m_achievementsNameToId;
 

@@ -1,4 +1,7 @@
+#include "account/account_repository.hpp"
+#include "account/account_repository_db.hpp"
 #include "config/configmanager.hpp"
+#include "creatures/players/vocations/vocation.hpp"
 #include "game/game.hpp"
 #include "items/item.hpp"
 #include "database/database.hpp"
@@ -99,6 +102,7 @@ int main(int argc, char** argv) {
 	InMemoryLogger::install(*injector);
 	KVMemory::install(*injector);
 	TestLuaEnvironment::install(*injector);
+	injector->install(di::bind<AccountRepository>.to<AccountRepositoryDB>().in(di::singleton));
 	DI::setTestContainer(injector);
 
 	(void)g_logger();
@@ -145,6 +149,12 @@ int main(int argc, char** argv) {
 		const auto appearancePath = (std::filesystem::path(config.getString(CORE_DIRECTORY)) / "items/appearances.dat").lexically_normal().string();
 		if (g_game().loadAppearanceProtobuf(appearancePath) != ERROR_NONE) {
 			std::fprintf(stderr, "[integration main] failed to load appearances.dat from %s\n", appearancePath.c_str());
+			std::fflush(stderr);
+			return EXIT_FAILURE;
+		}
+
+		if (!g_vocations().loadFromXml()) {
+			std::fprintf(stderr, "[integration main] failed to load XML/vocations.xml\n");
 			std::fflush(stderr);
 			return EXIT_FAILURE;
 		}

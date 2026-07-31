@@ -125,11 +125,29 @@ Player::Player() :
 	m_weaponProficiency(*this) {
 }
 
-Player::Player(std::shared_ptr<ProtocolGame> p) :
+#ifdef BUILD_TESTS
+Player::Player(PlayerControlType controlType) :
+	controlType(controlType),
+	m_wheelPlayer(*this),
+	m_playerAchievement(*this),
+	m_playerBadge(*this),
+	m_playerCyclopedia(*this),
+	m_playerTitle(*this),
+	m_playerVIP(*this),
+	m_animusMastery(*this),
+	m_playerAttachedEffects(*this),
+	m_storage(*this),
+	m_forgeHistoryPlayer(*this),
+	m_weaponProficiency(*this) {
+}
+#endif
+
+Player::Player(std::shared_ptr<ProtocolGame> p, PlayerControlType controlType) :
 	lastPing(OTSYS_TIME()),
 	lastPong(lastPing),
 	inbox(std::make_shared<Inbox>(ITEM_INBOX)),
 	client(std::move(p)),
+	controlType(controlType),
 	m_wheelPlayer(*this),
 	m_playerAchievement(*this),
 	m_playerBadge(*this),
@@ -12097,37 +12115,7 @@ void Player::onRemoveCreature(const std::shared_ptr<Creature> &creature, bool is
 	Creature::onRemoveCreature(creature, isLogout);
 
 	if (const auto &player = getPlayer(); player == creature) {
-		if (isLogout) {
-			onDeEquipInventory();
-
-			if (m_party) {
-				m_party->leaveParty(player, true);
-			}
-			if (guild) {
-				guild->removeMember(player);
-			}
-
-			if (isDead()) {
-				loginPosition = getTemplePosition();
-			} else {
-				loginPosition = getPosition();
-			}
-			lastLogout = time(nullptr);
-			g_logger().info("{} has logged out", getName());
-			g_chat().removeUserFromAllChannels(player);
-			clearPartyInvitations();
-		}
-
-		if (eventWalk != 0) {
-			setFollowCreature(nullptr);
-		}
-
-		if (tradePartner) {
-			g_game().internalCloseTrade(player);
-		}
-
-		closeShopWindow();
-
+		prepareRemoval(isLogout);
 		g_saveManager().savePlayer(player);
 	}
 
@@ -12135,6 +12123,39 @@ void Player::onRemoveCreature(const std::shared_ptr<Creature> &creature, bool is
 		setShopOwner(nullptr);
 		sendCloseShop();
 	}
+}
+
+void Player::prepareManagedRemoval(bool isLogout) {
+	Creature::onRemoveCreature(static_self_cast<Player>(), isLogout);
+	prepareRemoval(isLogout);
+}
+
+void Player::prepareRemoval(bool isLogout) {
+	const auto player = static_self_cast<Player>();
+	if (isLogout) {
+		onDeEquipInventory();
+
+		if (m_party) {
+			m_party->leaveParty(player, true);
+		}
+		if (guild) {
+			guild->removeMember(player);
+		}
+
+		loginPosition = isDead() ? getTemplePosition() : getPosition();
+		lastLogout = time(nullptr);
+		g_logger().info("{} has logged out", getName());
+		g_chat().removeUserFromAllChannels(player);
+		clearPartyInvitations();
+	}
+
+	if (eventWalk != 0) {
+		setFollowCreature(nullptr);
+	}
+	if (tradePartner) {
+		g_game().internalCloseTrade(player);
+	}
+	closeShopWindow();
 }
 
 void Player::onCreatureMove(const std::shared_ptr<Creature> &creature, const std::shared_ptr<Tile> &newTile, const Position &newPos, const std::shared_ptr<Tile> &oldTile, const Position &oldPos, bool teleport) {

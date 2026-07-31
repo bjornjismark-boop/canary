@@ -23,6 +23,12 @@ target_sources(
             npcs/npcs.cpp
             npcs/spawns/spawn_npc.cpp
             players/animus_mastery/animus_mastery.cpp
+            players/bots/bot_controller.cpp
+            players/bots/bot_controller.hpp
+            players/bots/bot_manager.cpp
+            players/bots/bot_manager.hpp
+            players/bots/bot_session.cpp
+            players/bots/bot_session.hpp
             players/grouping/familiars.cpp
             players/grouping/groups.cpp
             players/grouping/guild.cpp

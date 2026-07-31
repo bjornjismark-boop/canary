@@ -4,4 +4,5 @@ target_sources(
             imbuements_it.cpp
             money_it.cpp
             forge_it.cpp
+            player_bot_it.cpp
 )

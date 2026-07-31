@@ -290,6 +290,17 @@ class TestDatabase final {
 	}
 
 public:
+	static void requireDisposableDatabase(Database &database) {
+		const auto result = database.storeQuery("SELECT DATABASE() AS `database_name`");
+		if (!result) {
+			throw TestEnvError("Unable to determine the integration-test database name.");
+		}
+		const auto databaseName = result->getString("database_name");
+		if (!isSafeTestDatabaseName(databaseName)) {
+			throw TestEnvError("Refusing PlayerBots fixture writes to non-disposable database '" + databaseName + "'.");
+		}
+	}
+
 	static void init() {
 		static std::once_flag initOnce;
 		std::call_once(initOnce, [] {

@@ -91,6 +91,11 @@ enum ChannelEvent_t : uint8_t;
 enum SquareColor_t : uint8_t;
 enum Resource_t : uint8_t;
 
+enum class PlayerControlType : uint8_t {
+	Network,
+	Bot,
+};
+
 using GuildWarVector = std::vector<uint32_t>;
 using StashContainerList = std::vector<std::pair<std::shared_ptr<Item>, uint32_t>>;
 using ItemVector = std::vector<std::shared_ptr<Item>>;
@@ -156,8 +161,11 @@ public:
 	 *
 	 */
 	explicit Player();
+#ifdef BUILD_TESTS
+	explicit Player(PlayerControlType controlType);
+#endif
 
-	explicit Player(std::shared_ptr<ProtocolGame> p);
+	explicit Player(std::shared_ptr<ProtocolGame> p, PlayerControlType controlType = PlayerControlType::Network);
 	~Player() override;
 
 	// non-copyable
@@ -483,7 +491,19 @@ public:
 	uint32_t getIP() const;
 
 	bool isDisconnected() const {
-		return getIP() == 0;
+		return controlType == PlayerControlType::Network && getIP() == 0;
+	}
+
+	[[nodiscard]] PlayerControlType getControlType() const {
+		return controlType;
+	}
+
+	[[nodiscard]] bool isNetworkControlled() const {
+		return controlType == PlayerControlType::Network;
+	}
+
+	[[nodiscard]] bool isBotControlled() const {
+		return controlType == PlayerControlType::Bot;
 	}
 
 #ifdef BUILD_TESTS
@@ -1568,6 +1588,8 @@ public:
 	bool isFoodActive(uint16_t itemId) const;
 
 private:
+	void prepareManagedRemoval(bool isLogout);
+	void prepareRemoval(bool isLogout);
 	friend class PlayerLock;
 	std::mutex mutex;
 
@@ -1749,6 +1771,7 @@ private:
 	std::shared_ptr<Party> m_party = nullptr;
 	std::shared_ptr<Player> tradePartner = nullptr;
 	std::shared_ptr<ProtocolGame> client = nullptr;
+	PlayerControlType controlType = PlayerControlType::Network;
 	std::shared_ptr<Task> walkTask;
 	std::shared_ptr<Town> town;
 	std::shared_ptr<Vocation> vocation = nullptr;
@@ -1915,6 +1938,7 @@ private:
 
 	friend class Game;
 	friend class SaveManager;
+	friend class BotSession;
 	friend class Npc;
 	friend class PlayerFunctions;
 	friend class NetworkMessageFunctions;

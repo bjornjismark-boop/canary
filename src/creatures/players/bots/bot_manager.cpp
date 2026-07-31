@@ -1,0 +1,113 @@
+/**
+ * Canary - A free and open-source MMORPG server emulator
+ * Copyright (©) 2019–present OpenTibiaBR
+ * License: https://github.com/opentibiabr/canary/blob/main/LICENSE
+ */
+
+#include "creatures/players/bots/bot_manager.hpp"
+
+#include "creatures/players/bots/bot_session.hpp"
+#include "game/game.hpp"
+#include "lib/logging/log_with_spd_log.hpp"
+#include "utils/tools.hpp"
+
+BotManager::BotManager(Game &game, BotSessionOperations operations) :
+	game(game), operations(std::move(operations)) {
+}
+
+BotManager::~BotManager() noexcept {
+	try {
+		bool success = true;
+		for (const auto &[name, session] : sessions) {
+			if (!session->close(false)) {
+				success = false;
+			}
+			session->ownerAttemptedDestructorCleanup = true;
+		}
+		if (!success) {
+			g_logger().error("[BotManager::~BotManager] One or more bots could not be removed; Game must outlive BotManager");
+		}
+	} catch (const std::exception &exception) {
+		g_logger().error("[BotManager::~BotManager] Exception during best-effort cleanup: {}", exception.what());
+	} catch (...) {
+		g_logger().error("[BotManager::~BotManager] Unknown exception during best-effort cleanup");
+	}
+}
+
+std::shared_ptr<const BotSession> BotManager::login(const std::string &name) {
+	const auto key = asLowerCaseString(name);
+	if (key.empty()) {
+		g_logger().warn("[BotManager::login] Rejected bot login with an empty name");
+		return nullptr;
+	}
+	if (sessions.contains(key)) {
+		g_logger().warn("[BotManager::login] Rejected duplicate managed bot login for '{}'", name);
+		return nullptr;
+	}
+	if (game.getPlayerByName(name)) {
+		g_logger().warn("[BotManager::login] Rejected bot login for '{}': name is already in the world", name);
+		return nullptr;
+	}
+
+	auto session = std::shared_ptr<BotSession>(new BotSession(game, operations));
+	if (!session->load(name)) {
+		g_logger().warn("[BotManager::login] Failed to load bot '{}'", name);
+		return nullptr;
+	}
+	if (!session->place()) {
+		g_logger().warn("[BotManager::login] Failed to place bot '{}'", name);
+		return nullptr;
+	}
+	sessions.emplace(key, session);
+	return session;
+}
+
+bool BotManager::logout(const std::string &name, bool savePlayer) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	if (it == sessions.end()) {
+		return false;
+	}
+	if (!it->second->close(savePlayer)) {
+		return false;
+	}
+	sessions.erase(it);
+	return true;
+}
+
+ReturnValue BotManager::move(const std::string &name, Direction direction) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? RETURNVALUE_NOTPOSSIBLE : it->second->move(direction);
+}
+
+bool BotManager::save(const std::string &name) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	if (it == sessions.end()) {
+		return false;
+	}
+	if (it->second->getState() != BotSessionState::PendingSave) {
+		return it->second->save();
+	}
+	if (!it->second->close(true)) {
+		return false;
+	}
+	sessions.erase(it);
+	return true;
+}
+
+std::shared_ptr<const BotSession> BotManager::getSession(const std::string &name) const {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? nullptr : it->second;
+}
+
+bool BotManager::clear(bool savePlayers) {
+	bool success = true;
+	for (auto it = sessions.begin(); it != sessions.end();) {
+		if (it->second->close(savePlayers)) {
+			it = sessions.erase(it);
+		} else {
+			success = false;
+			++it;
+		}
+	}
+	return success;
+}

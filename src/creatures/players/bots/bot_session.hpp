@@ -1,0 +1,74 @@
+/**
+ * Canary - A free and open-source MMORPG server emulator
+ * Copyright (©) 2019–present OpenTibiaBR
+ * License: https://github.com/opentibiabr/canary/blob/main/LICENSE
+ */
+
+#pragma once
+
+#include "creatures/players/bots/bot_controller.hpp"
+
+#ifndef USE_PRECOMPILED_HEADERS
+	#include <functional>
+	#include <memory>
+	#include <string>
+#endif
+
+class Game;
+class Player;
+class BotManager;
+enum class ManagedPlayerRemovalResult : uint8_t;
+
+struct BotSessionOperations {
+	std::function<bool(const std::shared_ptr<Player> &)> save;
+	std::function<ManagedPlayerRemovalResult(
+		const std::shared_ptr<Player> &,
+		bool,
+		const std::function<bool(const std::shared_ptr<Player> &)> &
+	)> remove;
+};
+
+enum class BotSessionState : uint8_t {
+	Created,
+	Loaded,
+	Placed,
+	PendingSave,
+	Closed,
+};
+
+class BotSession final {
+public:
+	~BotSession() noexcept;
+
+	BotSession(const BotSession &) = delete;
+	BotSession &operator=(const BotSession &) = delete;
+
+	[[nodiscard]] std::shared_ptr<const Player> getPlayer() const {
+		return player;
+	}
+
+	[[nodiscard]] BotSessionState getState() const {
+		return state;
+	}
+
+private:
+	friend class BotManager;
+
+	explicit BotSession(Game &game, BotSessionOperations operations);
+
+	[[nodiscard]] bool load(const std::string &name);
+	[[nodiscard]] bool place();
+	[[nodiscard]] ReturnValue move(Direction direction);
+	[[nodiscard]] bool save() const;
+	[[nodiscard]] bool close(bool savePlayer);
+	[[nodiscard]] bool retryPendingSave();
+	void finishClose();
+	[[nodiscard]] bool isCompletelyAbsentFromWorld() const;
+
+	Game &game;
+	BotSessionOperations operations;
+	std::shared_ptr<Player> player;
+	std::unique_ptr<BotController> controller;
+	BotSessionState state = BotSessionState::Created;
+	bool ownerAttemptedDestructorCleanup = false;
+};
