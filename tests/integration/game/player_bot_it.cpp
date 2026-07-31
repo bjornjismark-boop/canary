@@ -7,11 +7,13 @@
 #include <gtest/gtest.h>
 
 #include "creatures/players/bots/bot_manager.hpp"
+#include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/player.hpp"
 #include "database/database.hpp"
 #include "game/game.hpp"
 #include "items/item.hpp"
 #include "io/iologindata.hpp"
+#include "io/functions/iologindata_load_player.hpp"
 #include "lib/logging/in_memory_logger.hpp"
 #include "test_database.hpp"
 
@@ -183,6 +185,128 @@ namespace {
 		std::fflush(stderr);
 		return nullptr;
 	}
+}
+
+TEST(PlayerBotIntegrationTest, LocalWalkabilityUsesRealWorldStateAndRevalidatesBeforeMovement) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	for (uint8_t rawDirection = DIRECTION_NORTH; rawDirection <= DIRECTION_LAST; ++rawDirection) {
+		createWalkableTile(getNextPosition(static_cast<Direction>(rawDirection), fixture.start));
+	}
+	createWalkableTile(fixture.start);
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	const auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	ASSERT_NE(nullptr, player);
+
+	for (uint8_t rawDirection = DIRECTION_NORTH; rawDirection <= DIRECTION_LAST; ++rawDirection) {
+		const auto result = manager.assess(fixture.name, static_cast<Direction>(rawDirection));
+		EXPECT_TRUE(result.walkable()) << static_cast<unsigned>(rawDirection);
+		EXPECT_EQ(getNextPosition(static_cast<Direction>(rawDirection), fixture.start), result.candidate.destination);
+	}
+
+	const Position east = getNextPosition(DIRECTION_EAST, fixture.start);
+	const auto eastTile = g_game().map.getTile(east);
+	ASSERT_NE(nullptr, eastTile);
+	const auto blockingItem = Item::CreateItem(1025);
+	ASSERT_NE(nullptr, blockingItem);
+	ASSERT_TRUE(blockingItem->isBlocking());
+	eastTile->internalAddThing(blockingItem);
+	const auto itemBlocked = manager.assess(fixture.name, DIRECTION_EAST);
+	EXPECT_EQ(BotWalkability::BlockedByItem, itemBlocked.outcome);
+	EXPECT_EQ(blockingItem->getID(), itemBlocked.blockingItemTypeId);
+	eastTile->removeThing(blockingItem, 1);
+
+	auto blocker = std::make_shared<RemovalCountingCreature>();
+	blocker->setID();
+	ASSERT_TRUE(g_game().placeCreature(blocker, east, false, true));
+	const auto creatureBlocked = manager.assess(fixture.name, DIRECTION_EAST);
+	EXPECT_EQ(BotWalkability::BlockedByCreature, creatureBlocked.outcome);
+	EXPECT_EQ(blocker->getID(), creatureBlocked.blockingCreatureId);
+	ASSERT_TRUE(g_game().removeCreature(blocker, true));
+	blocker.reset();
+	EXPECT_EQ(BotWalkability::Walkable, manager.assess(fixture.name, DIRECTION_EAST).outcome);
+
+	const auto field = Item::CreateItem(ITEM_FIREFIELD_PVP_FULL);
+	ASSERT_NE(nullptr, field);
+	eastTile->internalAddThing(field);
+	const auto hazardous = manager.assess(fixture.name, DIRECTION_EAST);
+	EXPECT_EQ(BotWalkability::WalkableWithRisk, hazardous.outcome);
+	EXPECT_GT(hazardous.movementCost, BotNavigation::CardinalCost);
+	eastTile->removeThing(field, 1);
+
+	const auto previouslyWalkable = manager.assess(fixture.name, DIRECTION_EAST);
+	ASSERT_TRUE(previouslyWalkable.walkable());
+	const auto lateBlocker = Item::CreateItem(1025);
+	ASSERT_NE(nullptr, lateBlocker);
+	eastTile->internalAddThing(lateBlocker);
+	const auto stale = manager.executeMovement(fixture.name, previouslyWalkable, std::chrono::milliseconds(1000));
+	ASSERT_TRUE(stale.walkability.has_value());
+	EXPECT_EQ(BotActionStatus::Rejected, stale.status);
+	EXPECT_EQ(BotActionFailure::StaleObservation, stale.failure);
+	EXPECT_EQ(BotWalkability::StaleObservation, stale.walkability->outcome);
+	EXPECT_EQ(fixture.start, player->getPosition());
+	eastTile->removeThing(lateBlocker, 1);
+	const auto refreshed = manager.assess(fixture.name, DIRECTION_EAST);
+	ASSERT_TRUE(refreshed.walkable());
+	const auto moved = manager.executeMovement(fixture.name, refreshed, std::chrono::milliseconds(2000));
+	ASSERT_TRUE(moved.walkability.has_value());
+	EXPECT_EQ(BotActionStatus::Succeeded, moved.status);
+	EXPECT_EQ(BotWalkability::Walkable, moved.walkability->outcome);
+	EXPECT_EQ(east, player->getPosition());
+	EXPECT_EQ(fixture.start.z, player->getPosition().z);
+
+	const auto observation = BotPerception::observe(player);
+	ASSERT_TRUE(observation.has_value());
+	EXPECT_EQ(BotWalkability::OutsideKnownOrVisibleArea, BotNavigation::assess(*observation, Position(fixture.start.x + 9, fixture.start.y, fixture.start.z)).outcome);
+
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerMovementRemainsUnchanged) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position destination(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	createWalkableTile(fixture.start);
+	createWalkableTile(destination);
+	const auto player = std::make_shared<Player>();
+	player->setName(fixture.name);
+	ASSERT_TRUE(IOLoginDataLoad::preLoadPlayer(player, fixture.name));
+	ASSERT_TRUE(IOLoginData::loadPlayerById(player, fixture.playerId, false));
+	player->setID();
+	player->setOnline(true);
+	ASSERT_TRUE(player->isNetworkControlled());
+	ASSERT_TRUE(g_game().placeCreature(player, fixture.start, false, true));
+	EXPECT_EQ(RETURNVALUE_NOERROR, g_game().internalMoveCreature(player, DIRECTION_EAST));
+	EXPECT_EQ(destination, player->getPosition());
+	player->setOnline(false);
+	const std::function<bool(const std::shared_ptr<Player> &)> noSave;
+	EXPECT_EQ(ManagedPlayerRemovalResult::Complete, g_game().removeManagedPlayer(player, true, noSave));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, NavigationValuesOutliveClosedSessionWithoutWorldOwnership) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	createWalkableTile(getNextPosition(DIRECTION_EAST, fixture.start));
+	BotWalkabilityResult assessment;
+	std::weak_ptr<const BotSession> sessionLifetime;
+	{
+		BotManager manager(g_game());
+		auto session = loginBotOrReport(manager, fixture.name);
+		ASSERT_NE(nullptr, session);
+		sessionLifetime = session;
+		assessment = manager.assess(fixture.name, DIRECTION_EAST);
+		EXPECT_TRUE(assessment.walkable());
+		session.reset();
+		EXPECT_TRUE(manager.logout(fixture.name, false));
+	}
+	EXPECT_TRUE(sessionLifetime.expired());
+	EXPECT_FALSE(assessment.containsWorldOwnership());
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
 }
 
 TEST(PlayerBotIntegrationTest, RunsDatabaseToMovementSaveAndRemovalLifecycle) {

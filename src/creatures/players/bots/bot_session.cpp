@@ -6,6 +6,7 @@
 
 #include "creatures/players/bots/bot_session.hpp"
 
+#include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/player.hpp"
 #include "game/game.hpp"
 #include "io/functions/iologindata_load_player.hpp"
@@ -123,6 +124,20 @@ ReturnValue BotSession::move(Direction direction) {
 		return RETURNVALUE_NOTPOSSIBLE;
 	}
 	return controller->move(direction);
+}
+
+BotWalkabilityResult BotSession::assess(Direction direction) const {
+	if (state != BotSessionState::Placed || !controller) {
+		return { .candidate = { .direction = direction }, .outcome = BotWalkability::WorldRejected, .movementCost = BotNavigation::BlockedCost };
+	}
+	return controller->assess(direction);
+}
+
+BotActionResult BotSession::executeMovement(const BotWalkabilityResult &assessment, std::chrono::milliseconds now) {
+	if (state != BotSessionState::Placed || !controller) {
+		return { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle };
+	}
+	return controller->executeMovement(assessment, now);
 }
 
 BotActionResult BotSession::tick(std::chrono::milliseconds now) {

@@ -43,6 +43,19 @@ struct BotItemReference {
 	auto operator<=>(const BotItemReference &) const = default;
 };
 
+struct BotTileObservation {
+	Position position;
+	uint16_t groundTypeId = 0;
+	uint16_t blockingItemTypeId = 0;
+	uint32_t blockingCreatureId = 0;
+	uint8_t harmfulFieldCombatType = 0;
+	bool hasGround = false;
+	bool terrainBlocked = false;
+	bool hazardous = false;
+
+	auto operator<=>(const BotTileObservation &) const = default;
+};
+
 struct BotObservation {
 	uint32_t playerGuid = 0;
 	uint32_t playerCreatureId = 0;
@@ -53,6 +66,7 @@ struct BotObservation {
 	uint32_t maxMana = 0;
 	uint32_t level = 0;
 	std::vector<BotCreatureObservation> visibleCreatures;
+	std::vector<BotTileObservation> visibleTiles;
 
 	auto operator<=>(const BotObservation &) const = default;
 };
@@ -79,6 +93,9 @@ struct BotAction {
 	BotActionReason reason = BotActionReason::Idle;
 	uint32_t targetCreatureId = 0;
 	Direction direction = DIRECTION_NONE;
+	Position observedOrigin;
+	Position observedDestination;
+	uint64_t observationSignature = 0;
 
 	auto operator<=>(const BotAction &) const = default;
 };
@@ -98,6 +115,50 @@ enum class BotActionFailure : uint8_t {
 	TimedOut,
 	WorldRejected,
 	TickBudgetExceeded,
+	InvalidDirection,
+	DifferentFloor,
+	OutsideKnownOrVisibleArea,
+	StaleObservation,
+};
+
+enum class BotWalkability : uint8_t {
+	Walkable,
+	WalkableWithRisk,
+	BlockedByTerrain,
+	BlockedByItem,
+	BlockedByCreature,
+	InvalidDirection,
+	DifferentFloor,
+	OutsideKnownOrVisibleArea,
+	StaleObservation,
+	WorldRejected,
+};
+
+struct BotMovementCandidate {
+	Position origin;
+	Position destination;
+	Direction direction = DIRECTION_NONE;
+	uint64_t observationSignature = 0;
+
+	auto operator<=>(const BotMovementCandidate &) const = default;
+};
+
+struct BotWalkabilityResult {
+	BotMovementCandidate candidate;
+	BotWalkability outcome = BotWalkability::InvalidDirection;
+	uint32_t movementCost = 0;
+	uint16_t blockingItemTypeId = 0;
+	uint32_t blockingCreatureId = 0;
+	uint8_t harmfulFieldCombatType = 0;
+	uint16_t worldReturnValue = 0;
+	uint8_t evaluatedTiles = 0;
+
+	[[nodiscard]] bool walkable() const {
+		return outcome == BotWalkability::Walkable || outcome == BotWalkability::WalkableWithRisk;
+	}
+	[[nodiscard]] bool containsWorldOwnership() const { return false; }
+
+	auto operator<=>(const BotWalkabilityResult &) const = default;
 };
 
 struct BotActionResult {
@@ -105,6 +166,7 @@ struct BotActionResult {
 	BotActionFailure failure = BotActionFailure::None;
 	uint32_t attempts = 0;
 	std::chrono::milliseconds retryAfter { 0 };
+	std::optional<BotWalkabilityResult> walkability;
 
 	[[nodiscard]] bool succeeded() const { return status == BotActionStatus::Succeeded; }
 };

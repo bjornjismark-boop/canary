@@ -8,6 +8,22 @@
 
 #include "creatures/players/player.hpp"
 #include "creatures/players/bots/bot_runtime.hpp"
+#include "creatures/players/bots/bot_navigation.hpp"
+#include "utils/tools.hpp"
+
+namespace {
+	BotObservation localObservation(Position origin = Position(100, 200, 7)) {
+		BotObservation observation { .position = origin };
+		for (uint8_t rawDirection = DIRECTION_NORTH; rawDirection <= DIRECTION_LAST; ++rawDirection) {
+			observation.visibleTiles.emplace_back(BotTileObservation {
+				.position = getNextPosition(static_cast<Direction>(rawDirection), origin),
+				.groundTypeId = 4526,
+				.hasGround = true,
+			});
+		}
+		return observation;
+	}
+}
 TEST(PlayerBotTest, ClassifiesNetworkAndBotControlExplicitly) {
 	const auto networkPlayer = std::make_shared<Player>();
 	const auto botPlayer = std::make_shared<Player>(PlayerControlType::Bot);
@@ -19,6 +35,98 @@ TEST(PlayerBotTest, ClassifiesNetworkAndBotControlExplicitly) {
 	EXPECT_EQ(PlayerControlType::Bot, botPlayer->getControlType());
 	EXPECT_FALSE(botPlayer->isNetworkControlled());
 	EXPECT_TRUE(botPlayer->isBotControlled());
+}
+
+TEST(PlayerBotNavigationTest, AllEightDirectionsProduceExpectedLocalDelta) {
+	const auto observation = localObservation();
+	const std::array expected {
+		Position(100, 199, 7), Position(101, 200, 7), Position(100, 201, 7), Position(99, 200, 7),
+		Position(99, 201, 7), Position(101, 201, 7), Position(99, 199, 7), Position(101, 199, 7),
+	};
+	for (uint8_t rawDirection = DIRECTION_NORTH; rawDirection <= DIRECTION_LAST; ++rawDirection) {
+		const auto result = BotNavigation::assess(observation, static_cast<Direction>(rawDirection));
+		EXPECT_EQ(expected[rawDirection], result.candidate.destination);
+		EXPECT_TRUE(result.walkable());
+	}
+}
+
+TEST(PlayerBotNavigationTest, InvalidDirectionIsRejected) {
+	EXPECT_EQ(BotWalkability::InvalidDirection, BotNavigation::assess(localObservation(), DIRECTION_NONE).outcome);
+}
+
+TEST(PlayerBotNavigationTest, CardinalAndDiagonalMovementCostsAreDistinct) {
+	const auto observation = localObservation();
+	EXPECT_EQ(BotNavigation::CardinalCost, BotNavigation::assess(observation, DIRECTION_EAST).movementCost);
+	EXPECT_EQ(BotNavigation::DiagonalCost, BotNavigation::assess(observation, DIRECTION_NORTHEAST).movementCost);
+}
+
+TEST(PlayerBotNavigationTest, SameFloorMovementIsAcceptedWhenOtherwiseValid) {
+	EXPECT_EQ(BotWalkability::Walkable, BotNavigation::assess(localObservation(), Position(101, 200, 7)).outcome);
+}
+
+TEST(PlayerBotNavigationTest, DifferentFloorLocalCandidateIsRejected) {
+	EXPECT_EQ(BotWalkability::DifferentFloor, BotNavigation::assess(localObservation(), Position(101, 200, 8)).outcome);
+}
+
+TEST(PlayerBotNavigationTest, StaticallyBlockedTileIsRejected) {
+	auto observation = localObservation();
+	auto &tile = observation.visibleTiles[1];
+	tile.hasGround = false;
+	EXPECT_EQ(BotWalkability::BlockedByTerrain, BotNavigation::assess(observation, DIRECTION_EAST).outcome);
+}
+
+TEST(PlayerBotNavigationTest, BlockingItemIsReportedCorrectly) {
+	auto observation = localObservation();
+	observation.visibleTiles[1].blockingItemTypeId = 1025;
+	const auto result = BotNavigation::assess(observation, DIRECTION_EAST);
+	EXPECT_EQ(BotWalkability::BlockedByItem, result.outcome);
+	EXPECT_EQ(1025, result.blockingItemTypeId);
+}
+
+TEST(PlayerBotNavigationTest, CreatureOccupiedTileIsReportedCorrectly) {
+	auto observation = localObservation();
+	observation.visibleTiles[1].blockingCreatureId = 77;
+	const auto result = BotNavigation::assess(observation, DIRECTION_EAST);
+	EXPECT_EQ(BotWalkability::BlockedByCreature, result.outcome);
+	EXPECT_EQ(77U, result.blockingCreatureId);
+}
+
+TEST(PlayerBotNavigationTest, HazardousWalkableTileHasIncreasedCost) {
+	auto observation = localObservation();
+	observation.visibleTiles[1].hazardous = true;
+	observation.visibleTiles[1].harmfulFieldCombatType = 1;
+	const auto result = BotNavigation::assess(observation, DIRECTION_EAST);
+	EXPECT_EQ(BotWalkability::WalkableWithRisk, result.outcome);
+	EXPECT_GT(result.movementCost, BotNavigation::CardinalCost);
+}
+
+TEST(PlayerBotNavigationTest, DiagonalCornerBehaviorMatchesOrdinaryDestinationOnlyRule) {
+	auto observation = localObservation();
+	observation.visibleTiles[0].terrainBlocked = true;
+	observation.visibleTiles[1].terrainBlocked = true;
+	EXPECT_EQ(BotWalkability::Walkable, BotNavigation::assess(observation, DIRECTION_NORTHEAST).outcome);
+}
+
+TEST(PlayerBotNavigationTest, WalkabilityResultContainsValuesOnly) {
+	static_assert(std::is_trivially_destructible_v<BotWalkabilityResult>);
+	EXPECT_FALSE(BotNavigation::assess(localObservation(), DIRECTION_EAST).containsWorldOwnership());
+}
+
+TEST(PlayerBotNavigationTest, SnapshotDestructionRetainsNoWorldOwnership) {
+	auto owner = std::make_shared<int>(1);
+	std::weak_ptr<int> observer = owner;
+	{
+		const auto result = BotNavigation::assess(localObservation(), DIRECTION_EAST);
+		EXPECT_TRUE(result.walkable());
+	}
+	owner.reset();
+	EXPECT_TRUE(observer.expired());
+}
+
+TEST(PlayerBotNavigationTest, BoundedEvaluationDoesNotScanUnrestrictedMapArea) {
+	const auto result = BotNavigation::assess(localObservation(), DIRECTION_EAST);
+	EXPECT_EQ(1, result.evaluatedTiles);
+	EXPECT_LE(result.evaluatedTiles, BotNavigation::MaximumEvaluatedTiles);
 }
 
 TEST(PlayerBotTest, BotWithoutClientIsNotADisconnectedNetworkSession) {

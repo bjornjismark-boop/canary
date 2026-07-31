@@ -6,6 +6,7 @@
 
 #include "creatures/players/bots/bot_controller.hpp"
 
+#include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/player.hpp"
 #include "game/game.hpp"
 #include "lib/logging/log_with_spd_log.hpp"
@@ -107,9 +108,23 @@ BotActionResult BotController::perform(const BotAction &action) const {
 		case BotActionType::Wait:
 			return { BotActionStatus::Succeeded, BotActionFailure::None };
 		case BotActionType::Move:
-			return game.internalMoveCreature(controlledPlayer, action.direction) == RETURNVALUE_NOERROR
-				? BotActionResult { BotActionStatus::Succeeded, BotActionFailure::None }
-				: BotActionResult { BotActionStatus::Rejected, BotActionFailure::WorldRejected };
+		{
+			auto movement = revalidateAndMove(action);
+			BotActionFailure failure = BotActionFailure::None;
+			switch (movement.outcome) {
+				case BotWalkability::InvalidDirection: failure = BotActionFailure::InvalidDirection; break;
+				case BotWalkability::DifferentFloor: failure = BotActionFailure::DifferentFloor; break;
+				case BotWalkability::OutsideKnownOrVisibleArea: failure = BotActionFailure::OutsideKnownOrVisibleArea; break;
+				case BotWalkability::StaleObservation: failure = BotActionFailure::StaleObservation; break;
+				case BotWalkability::WorldRejected: failure = BotActionFailure::WorldRejected; break;
+				case BotWalkability::BlockedByTerrain:
+				case BotWalkability::BlockedByItem:
+				case BotWalkability::BlockedByCreature: failure = BotActionFailure::WorldRejected; break;
+				case BotWalkability::Walkable:
+				case BotWalkability::WalkableWithRisk: break;
+			}
+			return { movement.walkable() ? BotActionStatus::Succeeded : BotActionStatus::Rejected, failure, 0, {}, movement };
+		}
 		case BotActionType::InspectCreature: {
 			const auto target = game.getCreatureByID(action.targetCreatureId);
 			if (!target || target->isRemoved()
@@ -122,6 +137,62 @@ BotActionResult BotController::perform(const BotAction &action) const {
 		}
 	}
 	return { BotActionStatus::Rejected, BotActionFailure::WorldRejected };
+}
+
+BotWalkabilityResult BotController::assess(Direction direction) const {
+	const auto controlledPlayer = player.lock();
+	const auto observation = BotPerception::observe(controlledPlayer);
+	if (!observation) {
+		BotMovementCandidate candidate { .direction = direction };
+		return { .candidate = candidate, .outcome = BotWalkability::WorldRejected, .movementCost = BotNavigation::BlockedCost };
+	}
+	return BotNavigation::assess(*observation, direction);
+}
+
+BotActionResult BotController::executeMovement(const BotWalkabilityResult &assessment, std::chrono::milliseconds now) {
+	const auto &candidate = assessment.candidate;
+	return execute(
+		BotAction {
+			.type = BotActionType::Move,
+			.reason = BotActionReason::Retry,
+			.targetCreatureId = 0,
+			.direction = candidate.direction,
+			.observedOrigin = candidate.origin,
+			.observedDestination = candidate.destination,
+			.observationSignature = candidate.observationSignature,
+		},
+		now
+	);
+}
+
+BotWalkabilityResult BotController::revalidateAndMove(const BotAction &action) const {
+	const auto controlledPlayer = player.lock();
+	if (!controlledPlayer || controlledPlayer->getPosition() != action.observedOrigin) {
+		return { .candidate = { action.observedOrigin, action.observedDestination, action.direction, action.observationSignature }, .outcome = BotWalkability::StaleObservation, .movementCost = BotNavigation::BlockedCost };
+	}
+	const auto observation = BotPerception::observe(controlledPlayer);
+	if (!observation) {
+		return { .candidate = { action.observedOrigin, action.observedDestination, action.direction, action.observationSignature }, .outcome = BotWalkability::WorldRejected, .movementCost = BotNavigation::BlockedCost };
+	}
+	auto current = BotNavigation::assess(*observation, action.observedDestination);
+	if (current.candidate.direction != action.direction || current.candidate.observationSignature != action.observationSignature) {
+		current.outcome = BotWalkability::StaleObservation;
+		current.movementCost = BotNavigation::BlockedCost;
+		return current;
+	}
+	if (!current.walkable()) {
+		return current;
+	}
+	const auto destinationTile = game.map.getTile(action.observedDestination);
+	const ReturnValue worldResult = destinationTile
+		? game.internalMoveCreature(controlledPlayer, destinationTile)
+		: RETURNVALUE_NOTPOSSIBLE;
+	current.worldReturnValue = static_cast<uint16_t>(worldResult);
+	if (worldResult != RETURNVALUE_NOERROR) {
+		current.outcome = BotWalkability::WorldRejected;
+		current.movementCost = BotNavigation::BlockedCost;
+	}
+	return current;
 }
 
 ReturnValue BotController::move(Direction direction) const {

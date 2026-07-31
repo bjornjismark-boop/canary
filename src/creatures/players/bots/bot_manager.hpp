@@ -31,6 +31,8 @@ public:
 	[[nodiscard]] std::shared_ptr<const BotSession> login(const std::string &name);
 	[[nodiscard]] bool logout(const std::string &name, bool savePlayer = true);
 	[[nodiscard]] ReturnValue move(const std::string &name, Direction direction);
+	[[nodiscard]] BotWalkabilityResult assess(const std::string &name, Direction direction) const;
+	[[nodiscard]] BotActionResult executeMovement(const std::string &name, const BotWalkabilityResult &assessment, std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult tick(const std::string &name, std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult execute(const std::string &name, const BotAction &action, std::chrono::milliseconds now);
 	[[nodiscard]] bool save(const std::string &name);

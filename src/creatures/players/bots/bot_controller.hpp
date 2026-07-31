@@ -27,6 +27,8 @@ public:
 	BotController(Game &game, const std::shared_ptr<Player> &player, BotRuntimeLimits limits = {}, DecisionLog decisionLog = {});
 
 	[[nodiscard]] ReturnValue move(Direction direction) const;
+	[[nodiscard]] BotWalkabilityResult assess(Direction direction) const;
+	[[nodiscard]] BotActionResult executeMovement(const BotWalkabilityResult &assessment, std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult tick(std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult execute(const BotAction &action, std::chrono::milliseconds now);
 	[[nodiscard]] const BotBlackboard &getBlackboard() const { return blackboard; }
@@ -35,6 +37,7 @@ public:
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
 	[[nodiscard]] BotActionResult perform(const BotAction &action) const;
+	[[nodiscard]] BotWalkabilityResult revalidateAndMove(const BotAction &action) const;
 
 	Game &game;
 	std::weak_ptr<Player> player;

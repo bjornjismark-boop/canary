@@ -50,6 +50,7 @@
     <ClInclude Include="..\src\creatures\players\player.hpp" />
     <ClInclude Include="..\src\creatures\players\bots\bot_controller.hpp" />
     <ClInclude Include="..\src\creatures\players\bots\bot_manager.hpp" />
+	<ClInclude Include="..\src\creatures\players\bots\bot_navigation.hpp" />
 	<ClInclude Include="..\src\creatures\players\bots\bot_runtime.hpp" />
     <ClInclude Include="..\src\creatures\players\bots\bot_session.hpp" />
     <ClInclude Include="..\src\creatures\players\vocations\vocation.hpp" />
@@ -297,6 +298,7 @@
     <ClCompile Include="..\src\creatures\players\player.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_controller.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_manager.cpp" />
+	<ClCompile Include="..\src\creatures\players\bots\bot_navigation.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_runtime.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_session.cpp" />
     <ClCompile Include="..\src\creatures\players\vocations\vocation.cpp" />

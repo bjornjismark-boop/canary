@@ -63,6 +63,8 @@ private:
 	[[nodiscard]] bool load(const std::string &name);
 	[[nodiscard]] bool place();
 	[[nodiscard]] ReturnValue move(Direction direction);
+	[[nodiscard]] BotWalkabilityResult assess(Direction direction) const;
+	[[nodiscard]] BotActionResult executeMovement(const BotWalkabilityResult &assessment, std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult tick(std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult execute(const BotAction &action, std::chrono::milliseconds now);
 	[[nodiscard]] bool save() const;

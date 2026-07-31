@@ -79,6 +79,20 @@ ReturnValue BotManager::move(const std::string &name, Direction direction) {
 	return it == sessions.end() ? RETURNVALUE_NOTPOSSIBLE : it->second->move(direction);
 }
 
+BotWalkabilityResult BotManager::assess(const std::string &name, Direction direction) const {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end()
+		? BotWalkabilityResult { .candidate = { .direction = direction }, .outcome = BotWalkability::WorldRejected, .movementCost = std::numeric_limits<uint32_t>::max() }
+		: it->second->assess(direction);
+}
+
+BotActionResult BotManager::executeMovement(const std::string &name, const BotWalkabilityResult &assessment, std::chrono::milliseconds now) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end()
+		? BotActionResult { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle }
+		: it->second->executeMovement(assessment, now);
+}
+
 BotActionResult BotManager::tick(const std::string &name, std::chrono::milliseconds now) {
 	const auto it = sessions.find(asLowerCaseString(name));
 	return it == sessions.end()
