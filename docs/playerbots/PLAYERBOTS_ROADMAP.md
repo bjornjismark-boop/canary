@@ -158,8 +158,8 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 
 ### Leverabler
 
-- [ ] target discovery
-- [ ] target scoring
+- [x] M3A target discovery och combat perception
+- [x] M3A deterministisk target scoring
 - [ ] melee range
 - [ ] line of sight
 - [ ] autoattack/follow-adapter
@@ -168,8 +168,24 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 - [ ] emergency healing
 - [ ] flee destination
 - [ ] reträttvägsbedömning
-- [ ] flera threats
-- [ ] stop attack och target invalidation
+- [x] M3A flera observerade threats och bounded crowd-risk
+- [x] M3A advisory target invalidation och release intent
+
+### M3A evidens — combat perception och target evaluation
+
+- [x] värdebaserade self-, creature-, policy-, candidate-, threat-, score-, selection-, lock-, intent- och failure-kontrakt utan world ownership;
+- [x] observationen begränsas till M1:s legitima synfält och M2:s bounded route-evidens; synlig health-procent, observerade attacker/follow-state och botens egen damage map används utan dolda monstervärden;
+- [x] default non-PvP avvisar players, NPC:er och player-owned summons samt stale, hidden, different-floor, dead, protected och unreachable targets med normaliserade skäl;
+- [x] deterministisk bounded scoring, overflow-clamping, slutlig ID tie-break och hysteresis med omedelbar invalid target release;
+- [x] endast advisory intents; attacked creature, follow state, movement, cooldowns, mana, health och items muteras inte;
+- [x] fokuserad gate: build 0, unit 88/88, databasbackad integration 22/22, diff 0;
+- [x] source commit `07458b8ba`;
+- [x] slutreview: summon-master knowledge leakage och direct-distance route proxy fixades; upprepad komplett gate utan blocker.
+
+### Kvarvarande M3-arbete
+
+- [ ] M3B — attack execution, cooldowns, range och combat positioning;
+- [ ] M3C — healing, survival, flee och death handling.
 
 ### Acceptance
 
