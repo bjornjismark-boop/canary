@@ -160,10 +160,10 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 
 - [x] M3A target discovery och combat perception
 - [x] M3A deterministisk target scoring
-- [ ] melee range
-- [ ] line of sight
-- [ ] autoattack/follow-adapter
-- [ ] cooldown-aware actions
+- [x] melee range
+- [x] line of sight
+- [x] autoattack/follow-adapter
+- [x] cooldown-aware actions
 - [ ] configurable healing profile
 - [ ] emergency healing
 - [ ] flee destination
@@ -184,13 +184,25 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 
 ### Kvarvarande M3-arbete
 
-- [ ] M3B — attack execution, cooldowns, range och combat positioning;
+- [x] M3B — attack execution, cooldowns, range och combat positioning;
 - [ ] M3C — healing, survival, flee och death handling.
+
+### M3B evidens — authoritative combat execution
+
+- [x] M3A-valda monster re-resolves och revalideras omedelbart före mutation; players, NPC:er och summons är hårt avvisade utan PvP-opt-in;
+- [x] attack assignment använder ordinarie `Game::playerSetAttackedCreature`, observerar verklig attacked-target och lämnar swing, cooldown, ammunition, events och damage till Canary;
+- [x] explicit värdebaserad attack-state machine med stale/lifecycle/visibility/floor/policy/zone/LOS/range-fel, cappad backoff, ändliga retries och teardown-cancellation;
+- [x] melee- och ranged-range läses från verklig utrustningsstate; M2B väljer deterministiskt bounded safe positioning och exekverar ett observerat steg i taget;
+- [x] chase begränsas till route length 16, tre reposition attempts, åtta tiles från combat origin, två no-progress observations och fem sekunders timeout;
+- [x] fokuserad gate: build 0, unit 123/123, databasbackad integration 26/26, diff 0;
+- [x] relevant Canary monster combat/target/pathfinding regression 15/15;
+- [x] source commit `702d61fc3`;
+- [x] slutreview: oavsiktlig PvP-opt-in blocker fixad; upprepad komplett gate utan blocker.
 
 ### Acceptance
 
-- [ ] botten attackerar bara tillåtna testmonsters;
-- [ ] botten håller melee-avstånd;
+- [x] botten attackerar bara tillåtna testmonsters;
+- [x] botten håller melee-avstånd;
 - [ ] healing respekterar mana, item count och cooldown;
 - [ ] healingkommando dupliceras inte före resultat;
 - [ ] akut health avbryter offensiv och loot;
