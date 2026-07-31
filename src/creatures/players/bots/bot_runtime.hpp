@@ -65,6 +65,7 @@ struct BotObservation {
 	uint32_t mana = 0;
 	uint32_t maxMana = 0;
 	uint32_t level = 0;
+	uint64_t topologyRevision = 0;
 	std::vector<BotCreatureObservation> visibleCreatures;
 	std::vector<BotTileObservation> visibleTiles;
 

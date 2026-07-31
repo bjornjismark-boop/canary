@@ -54,6 +54,7 @@ public:
 	[[nodiscard]] const BotBlackboard *getBlackboard() const {
 		return controller ? &controller->getBlackboard() : nullptr;
 	}
+	[[nodiscard]] const BotRouteProgress *getRouteProgress() const { return controller ? &controller->getRouteProgress() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -67,6 +68,9 @@ private:
 	[[nodiscard]] BotActionResult executeMovement(const BotWalkabilityResult &assessment, std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult tick(std::chrono::milliseconds now);
 	[[nodiscard]] BotActionResult execute(const BotAction &action, std::chrono::milliseconds now);
+	[[nodiscard]] BotRouteProgress startRoute(const Position &destination, std::chrono::milliseconds now, BotRouteLimits limits);
+	[[nodiscard]] BotRouteProgress advanceRoute(std::chrono::milliseconds now);
+	[[nodiscard]] BotRouteProgress cancelRoute();
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

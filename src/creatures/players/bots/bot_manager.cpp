@@ -139,3 +139,18 @@ bool BotManager::clear(bool savePlayers) {
 	}
 	return success;
 }
+
+BotRouteProgress BotManager::startRoute(const std::string &name, const Position &destination, std::chrono::milliseconds now, BotRouteLimits limits) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotRouteProgress { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle } : it->second->startRoute(destination, now, limits);
+}
+
+BotRouteProgress BotManager::advanceRoute(const std::string &name, std::chrono::milliseconds now) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotRouteProgress { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle } : it->second->advanceRoute(now);
+}
+
+BotRouteProgress BotManager::cancelRoute(const std::string &name) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end() ? BotRouteProgress { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle } : it->second->cancelRoute();
+}

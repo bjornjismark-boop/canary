@@ -154,6 +154,21 @@ BotActionResult BotSession::execute(const BotAction &action, std::chrono::millis
 	return controller->execute(action, now);
 }
 
+BotRouteProgress BotSession::startRoute(const Position &destination, std::chrono::milliseconds now, BotRouteLimits limits) {
+	if (state != BotSessionState::Placed || !controller) return { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle };
+	return controller->startRoute(destination, now, limits);
+}
+
+BotRouteProgress BotSession::advanceRoute(std::chrono::milliseconds now) {
+	if (state != BotSessionState::Placed || !controller) return { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle };
+	return controller->advanceRoute(now);
+}
+
+BotRouteProgress BotSession::cancelRoute() {
+	if (state != BotSessionState::Placed || !controller) return { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle };
+	return controller->cancelRoute();
+}
+
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
 		return false;
@@ -227,6 +242,7 @@ bool BotSession::retryPendingSave() {
 }
 
 void BotSession::finishClose() {
+	if (controller) (void)controller->cancelRoute();
 	controller.reset();
 	player.reset();
 	state = BotSessionState::Closed;

@@ -265,6 +265,48 @@ TEST(PlayerBotIntegrationTest, LocalWalkabilityUsesRealWorldStateAndRevalidatesB
 	EXPECT_FALSE(fixture.hasCommittedRows());
 }
 
+TEST(PlayerBotIntegrationTest, BoundedRouteExecutesRepathsAndCancelsWithRealWorldState) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	for (int y = -2; y <= 2; ++y) for (int x = -2; x <= 4; ++x) {
+		createWalkableTile(Position(static_cast<uint16_t>(fixture.start.x + x), static_cast<uint16_t>(fixture.start.y + y), fixture.start.z));
+	}
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	const auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	const Position destination(fixture.start.x + 3, fixture.start.y, fixture.start.z);
+
+	auto started = manager.startRoute(fixture.name, destination, std::chrono::milliseconds(1000));
+	ASSERT_EQ(BotRouteState::Ready, started.state);
+	auto blocker = std::make_shared<RemovalCountingCreature>();
+	blocker->setID();
+	ASSERT_TRUE(g_game().placeCreature(blocker, Position(fixture.start.x + 1, fixture.start.y, fixture.start.z), false, true));
+	auto blocked = manager.advanceRoute(fixture.name, std::chrono::milliseconds(1100));
+	EXPECT_EQ(BotRouteState::Backoff, blocked.state);
+	EXPECT_EQ(BotRouteReason::DynamicBlocker, blocked.reason);
+	EXPECT_EQ(fixture.start, player->getPosition());
+	ASSERT_TRUE(g_game().removeCreature(blocker, true));
+	blocker.reset();
+
+	auto progress = manager.advanceRoute(fixture.name, blocked.backoffDeadline);
+	EXPECT_EQ(BotRouteState::ReplanRequired, progress.state);
+	EXPECT_NE(fixture.start, player->getPosition());
+	for (uint32_t step = 1; step < 8 && progress.state != BotRouteState::Arrived; ++step) {
+		progress = manager.advanceRoute(fixture.name, std::chrono::milliseconds(2000 + step * 1000));
+	}
+	EXPECT_EQ(BotRouteState::Arrived, progress.state);
+	EXPECT_EQ(destination, player->getPosition());
+	EXPECT_EQ(fixture.start.z, player->getPosition().z);
+	EXPECT_EQ(0U, progress.consecutiveNoProgress);
+
+	EXPECT_EQ(BotRouteState::Ready, manager.startRoute(fixture.name, fixture.start, std::chrono::milliseconds(12000)).state);
+	EXPECT_EQ(BotRouteState::Cancelled, manager.cancelRoute(fixture.name).state);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	EXPECT_EQ(nullptr, session->getRouteProgress());
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
 TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerMovementRemainsUnchanged) {
 	PlayerBotDatabaseFixture fixture(g_database());
 	const Position destination(fixture.start.x + 1, fixture.start.y, fixture.start.z);

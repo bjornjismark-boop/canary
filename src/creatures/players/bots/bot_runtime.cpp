@@ -52,11 +52,13 @@ std::optional<BotObservation> BotPerception::observe(const std::shared_ptr<Playe
 		});
 	}
 	std::ranges::sort(observation.visibleCreatures, {}, &BotCreatureObservation::id);
-	for (uint8_t rawDirection = DIRECTION_NORTH; rawDirection <= DIRECTION_LAST; ++rawDirection) {
-		const auto position = getNextPosition(static_cast<Direction>(rawDirection), player->getPosition());
-		if (!Position::areInRange<8, 6, 0>(player->getPosition(), position)) {
-			continue;
-		}
+	for (int32_t offsetY = -6; offsetY <= 6; ++offsetY) {
+		for (int32_t offsetX = -8; offsetX <= 8; ++offsetX) {
+		const Position position(
+			static_cast<uint16_t>(player->getPosition().x + offsetX),
+			static_cast<uint16_t>(player->getPosition().y + offsetY),
+			player->getPosition().z
+		);
 		BotTileObservation tileObservation { .position = position };
 		const auto tile = g_game().map.getTile(position);
 		if (tile) {
@@ -87,10 +89,25 @@ std::optional<BotObservation> BotPerception::observe(const std::shared_ptr<Playe
 				}
 			}
 		}
-		observation.visibleTiles.emplace_back(tileObservation);
+			observation.visibleTiles.emplace_back(tileObservation);
+		}
 	}
 	std::ranges::sort(observation.visibleTiles, [](const auto &left, const auto &right) {
 		return left.position < right.position;
 	});
+	uint64_t revision = 1469598103934665603ULL;
+	for (const auto &tile : observation.visibleTiles) {
+		revision ^= tile.position.x;
+		revision *= 1099511628211ULL;
+		revision ^= tile.position.y;
+		revision *= 1099511628211ULL;
+		revision ^= tile.groundTypeId | (static_cast<uint64_t>(tile.blockingItemTypeId) << 16U)
+			| (static_cast<uint64_t>(tile.harmfulFieldCombatType) << 32U)
+			| (static_cast<uint64_t>(tile.hasGround) << 40U)
+			| (static_cast<uint64_t>(tile.terrainBlocked) << 41U)
+			| (static_cast<uint64_t>(tile.hazardous) << 42U);
+		revision *= 1099511628211ULL;
+	}
+	observation.topologyRevision = revision;
 	return observation;
 }

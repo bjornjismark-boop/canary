@@ -203,3 +203,88 @@ ReturnValue BotController::move(Direction direction) const {
 
 	return game.internalMoveCreature(controlledPlayer, direction);
 }
+
+BotRouteProgress BotController::startRoute(const Position &destination, std::chrono::milliseconds now, BotRouteLimits requestedLimits) {
+	route = {};
+	routeLimits = requestedLimits;
+	routeProgress = { .state = BotRouteState::Planning, .destination = destination, .lastProgressAt = now };
+	const auto controlledPlayer = player.lock();
+	const auto observation = BotPerception::observe(controlledPlayer);
+	if (!observation) {
+		routeProgress.state = BotRouteState::Failed; routeProgress.reason = BotRouteReason::InvalidLifecycle; return routeProgress;
+	}
+	route = BotNavigation::findRoute(*observation, { observation->position, destination, routeLimits });
+	routeProgress.actualPosition = observation->position;
+	routeProgress.reason = route.reason;
+	if (route.reason == BotRouteReason::AlreadyAtDestination) routeProgress.state = BotRouteState::Arrived;
+	else if (route.reason == BotRouteReason::RouteFound) routeProgress.state = BotRouteState::Ready;
+	else routeProgress.state = BotRouteState::Failed;
+	return routeProgress;
+}
+
+BotRouteProgress BotController::advanceRoute(std::chrono::milliseconds now) {
+	if (routeProgress.state == BotRouteState::Cancelled || routeProgress.state == BotRouteState::Arrived || routeProgress.state == BotRouteState::Failed) return routeProgress;
+	if (routeProgress.state == BotRouteState::Backoff && now < routeProgress.backoffDeadline) return routeProgress;
+	const auto controlledPlayer = player.lock();
+	const auto observation = BotPerception::observe(controlledPlayer);
+	if (!observation) { routeProgress.state = BotRouteState::Failed; routeProgress.reason = BotRouteReason::InvalidLifecycle; return routeProgress; }
+	routeProgress.actualPosition = observation->position;
+	if (observation->position == routeProgress.destination) { routeProgress.state = BotRouteState::Arrived; routeProgress.reason = BotRouteReason::AlreadyAtDestination; return routeProgress; }
+	if (routeProgress.state == BotRouteState::Ready && !route.positions.empty()) {
+		routeProgress.expectedOrigin = observation->position;
+		routeProgress.expectedNext = route.positions.front();
+		const auto nextTile = std::ranges::find(observation->visibleTiles, routeProgress.expectedNext, &BotTileObservation::position);
+		if (observation->topologyRevision != route.topologyRevision || nextTile == observation->visibleTiles.end() || BotNavigation::signature(*nextTile) != route.signatures.front()) {
+			routeProgress.reason = nextTile != observation->visibleTiles.end() && nextTile->blockingCreatureId != 0 ? BotRouteReason::DynamicBlocker : BotRouteReason::StaleTopology;
+			if (++routeProgress.totalReplans > routeLimits.maxReplans) { routeProgress.state = BotRouteState::Failed; routeProgress.reason = BotRouteReason::ReplanLimitExceeded; return routeProgress; }
+			routeProgress.state = BotRouteState::Backoff;
+			routeProgress.backoffDeadline = now + BotNavigation::backoff(routeLimits, routeProgress.totalReplans);
+			return routeProgress;
+		}
+	}
+
+	routeProgress.state = BotRouteState::Planning;
+	route = BotNavigation::findRoute(*observation, { observation->position, routeProgress.destination, routeLimits });
+	if (!route.found() || route.positions.empty()) { routeProgress.state = BotRouteState::Failed; routeProgress.reason = route.reason; return routeProgress; }
+	routeProgress.state = BotRouteState::Ready;
+	routeProgress.expectedOrigin = observation->position;
+	routeProgress.expectedNext = route.positions.front();
+	const auto currentTile = std::ranges::find(observation->visibleTiles, routeProgress.expectedNext, &BotTileObservation::position);
+	if (currentTile == observation->visibleTiles.end() || BotNavigation::signature(*currentTile) != route.signatures.front()) {
+		routeProgress.reason = BotRouteReason::StaleTopology;
+	} else if (currentTile->blockingCreatureId != 0) {
+		routeProgress.reason = BotRouteReason::DynamicBlocker;
+	} else {
+		routeProgress.state = BotRouteState::StepPending;
+		const auto assessment = BotNavigation::assess(*observation, routeProgress.expectedNext);
+		const auto actionResult = executeMovement(assessment, now);
+		if (!actionResult.succeeded()) routeProgress.reason = actionResult.failure == BotActionFailure::StaleObservation ? BotRouteReason::StaleTopology : BotRouteReason::MovementRejected;
+		else {
+			const auto actual = controlledPlayer->getPosition();
+			if (actual == routeProgress.expectedNext) {
+				BotNavigation::observeProgress(routeProgress, actual, now, routeLimits); routeProgress.routeIndex++;
+				if (actual == routeProgress.destination) { routeProgress.state = BotRouteState::Arrived; routeProgress.reason = BotRouteReason::RouteFound; }
+				else { routeProgress.state = BotRouteState::ReplanRequired; routeProgress.reason = BotRouteReason::RouteFound; route = {}; }
+				return routeProgress;
+			}
+			BotNavigation::observeProgress(routeProgress, actual, now, routeLimits);
+		}
+	}
+
+	if (routeProgress.reason == BotRouteReason::NoProgress && routeProgress.consecutiveNoProgress >= routeLimits.maxNoProgress) {
+		routeProgress.state = BotRouteState::Failed; return routeProgress;
+	}
+	if (++routeProgress.totalReplans > routeLimits.maxReplans) {
+		routeProgress.state = BotRouteState::Failed; routeProgress.reason = BotRouteReason::ReplanLimitExceeded; return routeProgress;
+	}
+	routeProgress.state = BotRouteState::Backoff;
+	routeProgress.backoffDeadline = now + BotNavigation::backoff(routeLimits, routeProgress.totalReplans);
+	return routeProgress;
+}
+
+BotRouteProgress BotController::cancelRoute() {
+	route = {};
+	routeProgress.state = BotRouteState::Cancelled;
+	routeProgress.reason = BotRouteReason::Cancelled;
+	return routeProgress;
+}

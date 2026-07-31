@@ -38,6 +38,9 @@ public:
 	[[nodiscard]] bool save(const std::string &name);
 	[[nodiscard]] std::shared_ptr<const BotSession> getSession(const std::string &name) const;
 	[[nodiscard]] bool clear(bool savePlayers = true);
+	[[nodiscard]] BotRouteProgress startRoute(const std::string &name, const Position &destination, std::chrono::milliseconds now, BotRouteLimits limits = {});
+	[[nodiscard]] BotRouteProgress advanceRoute(const std::string &name, std::chrono::milliseconds now);
+	[[nodiscard]] BotRouteProgress cancelRoute(const std::string &name);
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

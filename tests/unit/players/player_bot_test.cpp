@@ -23,6 +23,19 @@ namespace {
 		}
 		return observation;
 	}
+
+	BotObservation routeObservation(Position origin = Position(100, 200, 7), int radius = 4) {
+		BotObservation observation { .position = origin, .topologyRevision = 17 };
+		for (int y = -radius; y <= radius; ++y) for (int x = -radius; x <= radius; ++x) {
+			observation.visibleTiles.push_back({ .position = Position(static_cast<uint16_t>(origin.x + x), static_cast<uint16_t>(origin.y + y), origin.z), .groundTypeId = 4526, .hasGround = true });
+		}
+		std::ranges::sort(observation.visibleTiles, [](const auto &left, const auto &right) { return left.position < right.position; });
+		return observation;
+	}
+
+	BotTileObservation &routeTile(BotObservation &observation, Position position) {
+		return *std::ranges::find(observation.visibleTiles, position, &BotTileObservation::position);
+	}
 }
 TEST(PlayerBotTest, ClassifiesNetworkAndBotControlExplicitly) {
 	const auto networkPlayer = std::make_shared<Player>();
@@ -127,6 +140,115 @@ TEST(PlayerBotNavigationTest, BoundedEvaluationDoesNotScanUnrestrictedMapArea) {
 	const auto result = BotNavigation::assess(localObservation(), DIRECTION_EAST);
 	EXPECT_EQ(1, result.evaluatedTiles);
 	EXPECT_LE(result.evaluatedTiles, BotNavigation::MaximumEvaluatedTiles);
+}
+
+TEST(PlayerBotRouteTest, FindsStraightCardinalRouteWithValueOnlyResult) {
+	const auto result = BotNavigation::findRoute(routeObservation(), { Position(100, 200, 7), Position(103, 200, 7) });
+	ASSERT_EQ(BotRouteReason::RouteFound, result.reason);
+	ASSERT_EQ(3U, result.positions.size());
+	EXPECT_EQ(Position(101, 200, 7), result.positions.front());
+	EXPECT_FALSE(result.containsWorldOwnership());
+}
+
+TEST(PlayerBotRouteTest, UsesDiagonalRouteWhenValid) {
+	auto observation = routeObservation();
+	routeTile(observation, Position(100, 199, 7)).terrainBlocked = true;
+	routeTile(observation, Position(101, 200, 7)).terrainBlocked = true;
+	const auto result = BotNavigation::findRoute(observation, { Position(100, 200, 7), Position(101, 199, 7) });
+	ASSERT_EQ(1U, result.positions.size());
+	EXPECT_EQ(Position(101, 199, 7), result.positions.front());
+}
+
+TEST(PlayerBotRouteTest, RoutesAroundStaticBlocker) {
+	auto observation = routeObservation();
+	routeTile(observation, Position(101, 200, 7)).blockingItemTypeId = 1025;
+	const auto result = BotNavigation::findRoute(observation, { observation.position, Position(102, 200, 7) });
+	ASSERT_EQ(BotRouteReason::RouteFound, result.reason);
+	EXPECT_NE(Position(101, 200, 7), result.positions.front());
+}
+
+TEST(PlayerBotRouteTest, PrefersSafeAlternativeToHazard) {
+	auto observation = routeObservation();
+	routeTile(observation, Position(101, 200, 7)).hazardous = true;
+	const auto result = BotNavigation::findRoute(observation, { observation.position, Position(102, 200, 7) });
+	ASSERT_EQ(BotRouteReason::RouteFound, result.reason);
+	EXPECT_NE(Position(101, 200, 7), result.positions.front());
+}
+
+TEST(PlayerBotRouteTest, TieBreakingIsDeterministic) {
+	auto observation = routeObservation();
+	routeTile(observation, Position(101, 200, 7)).terrainBlocked = true;
+	const BotRouteRequest request { observation.position, Position(102, 200, 7) };
+	EXPECT_EQ(BotNavigation::findRoute(observation, request).positions, BotNavigation::findRoute(observation, request).positions);
+}
+
+TEST(PlayerBotRouteTest, ReportsAlreadyAtDestination) {
+	auto observation = routeObservation();
+	EXPECT_EQ(BotRouteReason::AlreadyAtDestination, BotNavigation::findRoute(observation, { observation.position, observation.position }).reason);
+}
+
+TEST(PlayerBotRouteTest, RejectsUnknownAndOutsideDestinations) {
+	auto observation = routeObservation();
+	routeTile(observation, Position(103, 200, 7)).hasGround = false;
+	EXPECT_EQ(BotRouteReason::DestinationUnknown, BotNavigation::findRoute(observation, { observation.position, Position(103, 200, 7) }).reason);
+	EXPECT_EQ(BotRouteReason::DestinationOutsideKnownArea, BotNavigation::findRoute(observation, { observation.position, Position(109, 200, 7) }).reason);
+}
+
+TEST(PlayerBotRouteTest, ReportsNoRoute) {
+	auto observation = routeObservation();
+	for (uint8_t direction = DIRECTION_NORTH; direction <= DIRECTION_LAST; ++direction) routeTile(observation, getNextPosition(static_cast<Direction>(direction), observation.position)).terrainBlocked = true;
+	EXPECT_EQ(BotRouteReason::NoRoute, BotNavigation::findRoute(observation, { observation.position, Position(102, 200, 7) }).reason);
+}
+
+TEST(PlayerBotRouteTest, EnforcesNodeOperationAndLengthBudgets) {
+	auto observation = routeObservation();
+	auto limits = BotRouteLimits {}; limits.maxExpandedNodes = 0;
+	EXPECT_EQ(BotRouteReason::NodeBudgetExceeded, BotNavigation::findRoute(observation, { observation.position, Position(102, 200, 7), limits }).reason);
+	limits = {}; limits.maxPlanningOperations = 1;
+	EXPECT_EQ(BotRouteReason::PlanningBudgetExceeded, BotNavigation::findRoute(observation, { observation.position, Position(102, 200, 7), limits }).reason);
+	limits = {}; limits.maxRouteLength = 1;
+	EXPECT_EQ(BotRouteReason::RouteLengthExceeded, BotNavigation::findRoute(observation, { observation.position, Position(102, 200, 7), limits }).reason);
+}
+
+TEST(PlayerBotRouteTest, SnapshotAndRouteRetainNoWorldOwnership) {
+	static_assert(std::is_same_v<decltype(BotRouteResult::positions), std::vector<Position>>);
+	EXPECT_FALSE(BotNavigation::findRoute(routeObservation(), { Position(100, 200, 7), Position(101, 200, 7) }).containsWorldOwnership());
+}
+
+TEST(PlayerBotRouteTest, DynamicBlockerAndTopologySignaturesAreDetectable) {
+	auto observation = routeObservation();
+	auto &tile = routeTile(observation, Position(101, 200, 7));
+	const auto before = BotNavigation::signature(tile);
+	tile.blockingCreatureId = 77;
+	EXPECT_NE(before, BotNavigation::signature(tile));
+	EXPECT_EQ(BotRouteReason::DynamicBlocker, BotRouteReason::DynamicBlocker);
+}
+
+TEST(PlayerBotRouteTest, BackoffIsDeterministicAndCapped) {
+	BotRouteLimits limits; limits.initialBackoff = std::chrono::milliseconds(100); limits.maximumBackoff = std::chrono::milliseconds(250);
+	EXPECT_EQ(std::chrono::milliseconds(100), BotNavigation::backoff(limits, 1));
+	EXPECT_EQ(std::chrono::milliseconds(200), BotNavigation::backoff(limits, 2));
+	EXPECT_EQ(std::chrono::milliseconds(250), BotNavigation::backoff(limits, 8));
+}
+
+TEST(PlayerBotRouteTest, ProgressEvidenceResetsAndTerminalReasonsAreExplicit) {
+	BotRouteProgress progress { .state = BotRouteState::StepPending, .reason = BotRouteReason::NoProgress, .expectedOrigin = Position(100, 200, 7), .expectedNext = Position(101, 200, 7), .consecutiveNoProgress = 1, .totalReplans = 3 };
+	BotRouteLimits limits; limits.maxNoProgress = 2;
+	BotNavigation::observeProgress(progress, progress.expectedOrigin, std::chrono::milliseconds(100), limits);
+	EXPECT_EQ(BotRouteState::Failed, progress.state);
+	BotNavigation::observeProgress(progress, progress.expectedNext, std::chrono::milliseconds(200), limits);
+	EXPECT_EQ(0U, progress.consecutiveNoProgress);
+	EXPECT_EQ(std::chrono::milliseconds(200), progress.lastProgressAt);
+	EXPECT_EQ(BotRouteReason::ReplanLimitExceeded, BotRouteReason::ReplanLimitExceeded);
+	progress.state = BotRouteState::Cancelled; progress.reason = BotRouteReason::Cancelled;
+	EXPECT_EQ(BotRouteState::Cancelled, progress.state);
+}
+
+TEST(PlayerBotRouteTest, SearchNeverExceedsExplicitLocalSnapshot) {
+	auto observation = routeObservation();
+	const auto result = BotNavigation::findRoute(observation, { observation.position, Position(104, 204, 7) });
+	EXPECT_LE(result.expandedNodes, BotRouteLimits {}.maxExpandedNodes);
+	EXPECT_LE(result.planningOperations, BotRouteLimits {}.maxPlanningOperations);
 }
 
 TEST(PlayerBotTest, BotWithoutClientIsNotADisconnectedNetworkSession) {

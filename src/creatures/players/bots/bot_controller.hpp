@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "creatures/players/bots/bot_runtime.hpp"
+#include "creatures/players/bots/bot_navigation.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -33,6 +33,10 @@ public:
 	[[nodiscard]] BotActionResult execute(const BotAction &action, std::chrono::milliseconds now);
 	[[nodiscard]] const BotBlackboard &getBlackboard() const { return blackboard; }
 	[[nodiscard]] size_t getLastTickWork() const { return lastTickWork; }
+	[[nodiscard]] BotRouteProgress startRoute(const Position &destination, std::chrono::milliseconds now, BotRouteLimits routeLimits = {});
+	[[nodiscard]] BotRouteProgress advanceRoute(std::chrono::milliseconds now);
+	[[nodiscard]] BotRouteProgress cancelRoute();
+	[[nodiscard]] const BotRouteProgress &getRouteProgress() const { return routeProgress; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -47,4 +51,7 @@ private:
 	std::chrono::milliseconds nextTickAt { 0 };
 	std::chrono::milliseconds nextLogAt { 0 };
 	size_t lastTickWork = 0;
+	BotRouteLimits routeLimits;
+	BotRouteResult route;
+	BotRouteProgress routeProgress;
 };
