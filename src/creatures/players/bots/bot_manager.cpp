@@ -179,3 +179,8 @@ BotCombatExecutionResult BotManager::executeCombat(const std::string &name, cons
 	const auto it = sessions.find(asLowerCaseString(name));
 	return it == sessions.end() ? BotCombatExecutionResult { BotCombatExecutionOutcome::InvalidLifecycle, BotAttackFailure::InvalidLifecycle, BotAttackState::Failed } : it->second->executeCombat(request, now, policy);
 }
+
+BotSurvivalAssessment BotManager::evaluateSurvival(const std::string &n, const BotSurvivalPolicy &p, std::vector<BotHealingOption> o) { const auto s = sessions.find(asLowerCaseString(n)); return s == sessions.end() ? BotSurvivalAssessment { .urgency = BotSurvivalUrgency::Fatal, .decision = BotSurvivalDecision::Dead } : s->second->evaluateSurvival(p, std::move(o)); }
+BotHealingResult BotManager::executeHealing(const std::string &n, const BotHealingOption &o, std::chrono::milliseconds now, const BotSurvivalPolicy &p) { const auto s = sessions.find(asLowerCaseString(n)); return s == sessions.end() ? BotHealingResult { .outcome = BotHealingOutcome::InvalidLifecycle } : s->second->executeHealing(o, now, p); }
+BotFleeResult BotManager::executeFlee(const std::string &n, std::chrono::milliseconds now, const BotSurvivalPolicy &p) { const auto s = sessions.find(asLowerCaseString(n)); return s == sessions.end() ? BotFleeResult { .outcome = BotFleeOutcome::Cancelled } : s->second->executeFlee(now, p); }
+BotDeathResult BotManager::observeDeath(const std::string &n) { const auto s = sessions.find(asLowerCaseString(n)); return s == sessions.end() ? BotDeathResult { .state = BotSurvivalState::Dead } : s->second->observeDeath(); }

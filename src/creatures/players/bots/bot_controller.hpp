@@ -9,6 +9,7 @@
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_combat.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
+#include "creatures/players/bots/bot_survival.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -48,6 +49,12 @@ public:
 	void cancelCombat();
 	[[nodiscard]] const BotTargetLock &getCombatLock() const { return combatLock; }
 	[[nodiscard]] const BotAttackExecutionState &getAttackExecutionState() const { return attackExecution; }
+	[[nodiscard]] BotSurvivalAssessment evaluateSurvival(const BotSurvivalPolicy &policy = {}, std::vector<BotHealingOption> options = {});
+	[[nodiscard]] BotHealingResult executeHealing(const BotHealingOption &, std::chrono::milliseconds now, const BotSurvivalPolicy &policy = {});
+	[[nodiscard]] BotFleeResult executeFlee(std::chrono::milliseconds now, const BotSurvivalPolicy &policy = {});
+	[[nodiscard]] BotDeathResult observeDeath();
+	void cancelSurvival();
+	[[nodiscard]] const BotSurvivalProgress &getSurvivalProgress() const { return survivalProgress; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -68,4 +75,5 @@ private:
 	BotTransitionProgress transitionProgress;
 	BotTargetLock combatLock;
 	BotAttackExecutionState attackExecution;
+	BotSurvivalProgress survivalProgress;
 };

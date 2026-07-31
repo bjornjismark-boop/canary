@@ -9,6 +9,7 @@
 #include "creatures/players/bots/bot_manager.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/combat/combat.hpp"
+#include "creatures/combat/condition.hpp"
 #include "creatures/players/player.hpp"
 #include "creatures/monsters/monster.hpp"
 #include "creatures/monsters/monsters.hpp"
@@ -109,8 +110,8 @@ namespace {
 
 			if (!database.executeQuery(fmt::format(
 					"INSERT INTO `players` "
-					"(`name`, `account_id`, `group_id`, `vocation`, `town_id`, `conditions`, `posx`, `posy`, `posz`, `deletion`) "
-					"VALUES ({}, {}, 1, 1, 1, X'', {}, {}, {}, 0)",
+					"(`name`, `account_id`, `group_id`, `vocation`, `town_id`, `health`, `healthmax`, `mana`, `manamax`, `cap`, `conditions`, `posx`, `posy`, `posz`, `deletion`) "
+					"VALUES ({}, {}, 1, 1, 1, 150, 150, 100, 100, 100000, X'', {}, {}, {}, 0)",
 					escapedName,
 					accountId,
 					start.x,
@@ -1117,4 +1118,195 @@ TEST(PlayerBotIntegrationTest, OrdinaryHeadlessNetworkVisibilityRemainsClientBou
 	const Position nearby(1, 1, 0);
 	EXPECT_FALSE(ordinary->canSee(nearby));
 	EXPECT_TRUE(bot->canSee(nearby));
+}
+
+TEST(PlayerBotIntegrationTest, SurvivalObservesActualHealthManaAndRealDamage) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer());
+	const auto before=manager.evaluateSurvival(fixture.name); EXPECT_NE(BotSurvivalDecision::Dead,before.decision); const auto health=player->getHealth(); CombatDamage damage; damage.primary={COMBAT_PHYSICALDAMAGE,-10}; ASSERT_TRUE(g_game().combatChangeHealth(nullptr,player,damage)); EXPECT_EQ(health-10,player->getHealth()); const auto after=manager.evaluateSurvival(fixture.name); EXPECT_GE(after.score.total,before.score.total); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, SurvivalObservesRealHarmfulCondition) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer()); auto condition=Condition::createCondition(CONDITIONID_COMBAT,CONDITION_PARALYZE,5000,0); ASSERT_TRUE(player->addCondition(condition)); EXPECT_GT(manager.evaluateSurvival(fixture.name).score.conditions,0); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, SurvivalRejectsMissingHealingItemWithoutMutation) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer()); const auto health=player->getHealth(); const auto mana=player->getMana(); auto option=BotHealingOption{.kind=BotHealingKind::HealthPotion,.itemTypeId=65500,.availableCount=1}; EXPECT_EQ(BotHealingOutcome::MissingItem,manager.executeHealing(fixture.name,option,std::chrono::milliseconds(1)).outcome); EXPECT_EQ(health,player->getHealth()); EXPECT_EQ(mana,player->getMana()); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, SurvivalRejectsInsufficientManaAndMissingCondition) {
+	static const bool coreLoaded = g_scripts().loadEventSchedulerScripts("data/core.lua"); ASSERT_TRUE(coreLoaded); g_actions().clear(); ASSERT_TRUE(g_scripts().loadEventSchedulerScripts("tests/fixture/playerbots/survival_actions.lua")); PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer()); player->learnInstantSpell("PlayerBot Test Expensive Healing"); player->learnInstantSpell("PlayerBot Test Cleanse"); auto spell=BotHealingOption{.kind=BotHealingKind::SelfHealingSpell,.spell="playerbot test expensive heal",.manaCost=1000}; EXPECT_EQ(BotHealingOutcome::MissingMana,manager.executeHealing(fixture.name,spell,std::chrono::milliseconds(1)).outcome); auto removal=BotHealingOption{.kind=BotHealingKind::ConditionRemoval,.spell="playerbot test cleanse",.removesConditions=1ULL<<3}; EXPECT_EQ(BotHealingOutcome::ConditionNotPresent,manager.executeHealing(fixture.name,removal,std::chrono::milliseconds(2)).outcome); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup()); g_actions().clear();
+}
+
+TEST(PlayerBotIntegrationTest, CriticalSurvivalStartsBoundedM2FleeAndReleasesCombatState) {
+	PlayerBotDatabaseFixture fixture(g_database()); const Position monsterPosition(fixture.start.x+1,fixture.start.y,fixture.start.z); for(int x=-3;x<=3;++x)for(int y=-3;y<=3;++y)createWalkableTile(Position(fixture.start.x+x,fixture.start.y+y,fixture.start.z)); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer()); auto monster=std::make_shared<Monster>(std::make_shared<MonsterType>("SurvivalThreat")); ASSERT_TRUE(g_game().placeCreature(monster,monsterPosition,false,true)); ASSERT_TRUE(player->setAttackedCreature(monster)); ASSERT_TRUE(player->setFollowCreature(monster)); CombatDamage damage; damage.primary={COMBAT_PHYSICALDAMAGE,-static_cast<int32_t>(player->getHealth()*8/10)}; ASSERT_TRUE(g_game().combatChangeHealth(monster,player,damage)); EXPECT_EQ(BotSurvivalDecision::Flee,manager.evaluateSurvival(fixture.name,{},{}).decision); const auto flee=manager.executeFlee(fixture.name,std::chrono::milliseconds(100)); EXPECT_EQ(BotFleeOutcome::FleeStarted,flee.outcome); EXPECT_EQ(nullptr,player->getAttackedCreature()); EXPECT_EQ(nullptr,player->getFollowCreature()); EXPECT_LE(flee.route.positions.size(),BotSurvivalPolicy{}.maxRouteLength); EXPECT_TRUE(g_game().removeCreature(monster,true)); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, SurvivalFleeAvoidsRealHarmfulTileWhenSafeAlternativeExists) {
+	PlayerBotDatabaseFixture fixture(g_database()); for(int x=-2;x<=2;++x)for(int y=-2;y<=2;++y)createWalkableTile(Position(fixture.start.x+x,fixture.start.y+y,fixture.start.z)); const Position hazard(fixture.start.x+1,fixture.start.y,fixture.start.z); auto field=Item::CreateItem(ITEM_FIREFIELD_PVP_FULL); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(g_game().map.getTile(hazard),field,INDEX_WHEREEVER,FLAG_NOLIMIT)); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); const auto flee=manager.executeFlee(fixture.name,std::chrono::milliseconds(1)); EXPECT_NE(hazard,flee.request.destination); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, SurvivalFleeUsesBoundedAlternativeAndDynamicRepath) {
+	PlayerBotDatabaseFixture fixture(g_database()); for(int x=-4;x<=4;++x)for(int y=-4;y<=4;++y)createWalkableTile(Position(fixture.start.x+x,fixture.start.y+y,fixture.start.z)); const Position staticBlock(fixture.start.x-1,fixture.start.y,fixture.start.z); auto wall=Item::CreateItem(1025); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(g_game().map.getTile(staticBlock),wall,INDEX_WHEREEVER,FLAG_NOLIMIT)); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto started=manager.executeFlee(fixture.name,std::chrono::milliseconds(1)); ASSERT_EQ(BotFleeOutcome::FleeStarted,started.outcome); EXPECT_NE(staticBlock,started.request.destination); ASSERT_FALSE(started.route.positions.empty()); auto blocker=std::make_shared<Monster>(std::make_shared<MonsterType>("FleeDynamicBlocker")); ASSERT_TRUE(g_game().placeCreature(blocker,started.route.positions.front(),false,true)); const auto repath=manager.executeFlee(fixture.name,std::chrono::milliseconds(2)); EXPECT_TRUE(repath.outcome==BotFleeOutcome::Progressing || repath.outcome==BotFleeOutcome::Blocked); EXPECT_LE(session->getRouteProgress()->totalReplans,BotSurvivalPolicy{}.maxAttempts); EXPECT_TRUE(g_game().removeCreature(blocker,true)); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, SurvivalFleeNoSafeRouteAndTimeoutAreFinite) {
+	{
+		PlayerBotDatabaseFixture fixture(g_database());
+		createWalkableTile(fixture.start);
+		BotManager manager(g_game());
+		const auto session = loginBotOrReport(manager, fixture.name);
+		ASSERT_NE(nullptr, session);
+		EXPECT_EQ(BotFleeOutcome::NoSafeDestination, manager.executeFlee(fixture.name, std::chrono::milliseconds(1)).outcome);
+		EXPECT_NE(BotSurvivalState::Fleeing, session->getSurvivalProgress()->state);
+		EXPECT_TRUE(manager.logout(fixture.name, false));
+		ASSERT_TRUE(fixture.cleanup());
+	}
+
+	{
+		PlayerBotDatabaseFixture fixture(g_database());
+		for (int x = -2; x <= 2; ++x) {
+			for (int y = -2; y <= 2; ++y) {
+				createWalkableTile(Position(fixture.start.x + x, fixture.start.y + y, fixture.start.z));
+			}
+		}
+		BotManager manager(g_game());
+		const auto session = loginBotOrReport(manager, fixture.name);
+		ASSERT_NE(nullptr, session);
+		ASSERT_EQ(BotFleeOutcome::FleeStarted, manager.executeFlee(fixture.name, std::chrono::milliseconds(1)).outcome);
+		EXPECT_EQ(BotFleeOutcome::TimedOut, manager.executeFlee(fixture.name, std::chrono::milliseconds(6000)).outcome);
+		EXPECT_EQ(BotSurvivalState::Failed, session->getSurvivalProgress()->state);
+		EXPECT_TRUE(manager.logout(fixture.name, false));
+		ASSERT_TRUE(fixture.cleanup());
+	}
+}
+
+TEST(PlayerBotIntegrationTest, VisibleHostileMovementRefreshesFleeWhileHiddenCreatureDoesNot) {
+	PlayerBotDatabaseFixture fixture(g_database()); for(int x=-4;x<=4;++x)for(int y=-2;y<=2;++y)createWalkableTile(Position(fixture.start.x+x,fixture.start.y+y,fixture.start.z)); const Position east(fixture.start.x+2,fixture.start.y,fixture.start.z), west(fixture.start.x-2,fixture.start.y,fixture.start.z), hidden(fixture.start.x+20,fixture.start.y,fixture.start.z); createWalkableTile(hidden); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto threat=std::make_shared<Monster>(std::make_shared<MonsterType>("FleeVisibleThreat")); ASSERT_TRUE(g_game().placeCreature(threat,east,false,true)); const auto player=std::const_pointer_cast<Player>(session->getPlayer()); auto base=BotPerception::observe(player); ASSERT_TRUE(base); auto combat=BotCombat::observe(player,*base); ASSERT_TRUE(combat); const auto first=BotSurvival::selectFlee(*base,*combat,{}); ASSERT_EQ(BotFleeOutcome::SafePositionSelected,first.outcome); EXPECT_LT(first.request.destination.x,fixture.start.x); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalMoveCreature(threat,g_game().map.getTile(west))); base=BotPerception::observe(player); combat=BotCombat::observe(player,*base); const auto second=BotSurvival::selectFlee(*base,*combat,{}); EXPECT_GT(second.request.destination.x,fixture.start.x); auto hiddenThreat=std::make_shared<Monster>(std::make_shared<MonsterType>("FleeHiddenThreat")); ASSERT_TRUE(g_game().placeCreature(hiddenThreat,hidden,false,true)); base=BotPerception::observe(player); combat=BotCombat::observe(player,*base); const auto third=BotSurvival::selectFlee(*base,*combat,{}); EXPECT_EQ(second.request.destination,third.request.destination); EXPECT_TRUE(g_game().removeCreature(hiddenThreat,true)); EXPECT_TRUE(g_game().removeCreature(threat,true)); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, RealPlayerDeathBecomesTerminalAndCancelsBotState) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position monsterPosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	const Position routeDestination(fixture.start.x, fixture.start.y + 1, fixture.start.z);
+	createWalkableTile(fixture.start);
+	createWalkableTile(monsterPosition);
+	createWalkableTile(routeDestination);
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	const auto deathTile = g_game().map.getTile(fixture.start);
+	ASSERT_NE(nullptr, deathTile);
+	const auto itemCount = deathTile->getItemCount();
+	auto monsterType = std::make_shared<MonsterType>("DeathThreat");
+	monsterType->info.health = 100000;
+	monsterType->info.healthMax = 100000;
+	auto monster = std::make_shared<Monster>(monsterType);
+	ASSERT_TRUE(g_game().placeCreature(monster, monsterPosition, false, true));
+
+	const auto selection = manager.evaluateCombat(fixture.name);
+	ASSERT_EQ(monster->getID(), selection.selectedCreatureId);
+	const auto base = BotPerception::observe(player);
+	ASSERT_TRUE(base);
+	const auto combat = BotCombat::observe(player, *base);
+	ASSERT_TRUE(combat);
+	const auto observed = std::ranges::find(combat->creatures, monster->getID(), &BotCombatCreatureObservation::id);
+	ASSERT_NE(combat->creatures.end(), observed);
+	const BotCombatExecutionRequest request { monster->getID(), combat->revision, observed->signature, player->getPosition() };
+	ASSERT_EQ(BotCombatExecutionOutcome::TargetAcquired, manager.executeCombat(fixture.name, request, std::chrono::milliseconds(1)).outcome);
+	ASSERT_EQ(BotRouteState::Ready, manager.startRoute(fixture.name, routeDestination, std::chrono::milliseconds(1)).state);
+	ASSERT_NE(0U, session->getCombatLock()->creatureId);
+	ASSERT_NE(BotAttackState::Idle, session->getAttackExecutionState()->state);
+	ASSERT_EQ(BotRouteState::Ready, session->getRouteProgress()->state);
+
+	CombatDamage damage;
+	damage.primary = { COMBAT_PHYSICALDAMAGE, -player->getHealth() };
+	ASSERT_TRUE(g_game().combatChangeHealth(monster, player, damage));
+	const auto tick = manager.tick(fixture.name, std::chrono::milliseconds(2));
+	EXPECT_EQ(BotActionFailure::InvalidLifecycle, tick.failure);
+	ASSERT_NE(nullptr, session->getSurvivalProgress());
+	EXPECT_EQ(BotSurvivalState::Dead, session->getSurvivalProgress()->state);
+	EXPECT_EQ(0U, session->getCombatLock()->creatureId);
+	EXPECT_EQ(BotAttackState::Cancelled, session->getAttackExecutionState()->state);
+	EXPECT_EQ(BotRouteState::Cancelled, session->getRouteProgress()->state);
+	EXPECT_GT(deathTile->getItemCount(), itemCount);
+	EXPECT_EQ(BotHealingOutcome::Dead, manager.executeHealing(fixture.name, {}, std::chrono::milliseconds(3)).outcome);
+	if (!monster->isRemoved()) {
+		EXPECT_TRUE(g_game().removeCreature(monster, true));
+	}
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, SessionCloseCancelsPendingSurvivalWithoutWorldOwnership) {
+	PlayerBotDatabaseFixture fixture(g_database()); for(int x=-2;x<=2;++x)for(int y=-2;y<=2;++y)createWalkableTile(Position(fixture.start.x+x,fixture.start.y+y,fixture.start.z)); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto pending=manager.executeFlee(fixture.name,std::chrono::milliseconds(1)); EXPECT_EQ(BotFleeOutcome::FleeStarted,pending.outcome); EXPECT_EQ(BotSurvivalState::Fleeing,session->getSurvivalProgress()->state); EXPECT_TRUE(manager.logout(fixture.name,false)); EXPECT_EQ(nullptr,session->getSurvivalProgress()); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, RealHealingItemAndSpellUseOrdinaryActionsAndObservedResults) {
+	static const bool coreLoaded = g_scripts().loadEventSchedulerScripts("data/core.lua"); ASSERT_TRUE(coreLoaded); g_actions().clear(); ASSERT_TRUE(g_scripts().loadEventSchedulerScripts("tests/fixture/playerbots/survival_actions.lua"));
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer()); CombatDamage damage; damage.primary={COMBAT_PHYSICALDAMAGE,-50}; ASSERT_TRUE(g_game().combatChangeHealth(nullptr,player,damage)); const auto beforeHealth=player->getHealth(); auto backpack=Item::CreateItem(ITEM_BACKPACK,1); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(player,backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT)); auto potion=Item::CreateItem(266,2); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),potion,INDEX_WHEREEVER,FLAG_NOLIMIT)); auto option=BotHealingOption{.kind=BotHealingKind::HealthPotion,.itemTypeId=266,.availableCount=2,.minimumHealing=40,.maximumHealing=40}; const auto accepted=manager.executeHealing(fixture.name,option,std::chrono::milliseconds(1)); EXPECT_EQ(BotHealingOutcome::Pending,accepted.outcome); const auto observed=manager.executeHealing(fixture.name,option,std::chrono::milliseconds(2)); EXPECT_EQ(BotHealingOutcome::Succeeded,observed.outcome); EXPECT_EQ(beforeHealth+40,player->getHealth()); EXPECT_GT(observed.observedHealthDelta,0); EXPECT_GT(observed.observedItemDelta,0); EXPECT_EQ(BotHealingOutcome::Exhausted,manager.executeHealing(fixture.name,option,std::chrono::milliseconds(3)).outcome);
+	(void)manager.evaluateSurvival(fixture.name); auto noEffectItem = Item::CreateItem(2854, 1); ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(backpack->getContainer(), noEffectItem, INDEX_WHEREEVER, FLAG_NOLIMIT)); BotHealingOption noEffectOption { .kind = BotHealingKind::HealingRune, .itemTypeId = 2854, .availableCount = 1 }; BotSurvivalPolicy noEffectPolicy; noEffectPolicy.timeout = std::chrono::milliseconds(10); EXPECT_EQ(BotHealingOutcome::Pending, manager.executeHealing(fixture.name, noEffectOption, std::chrono::milliseconds(10), noEffectPolicy).outcome); const auto noEffect = manager.executeHealing(fixture.name, noEffectOption, std::chrono::milliseconds(21), noEffectPolicy); EXPECT_EQ(BotHealingOutcome::NoEffect, noEffect.outcome); EXPECT_GT(noEffect.observedItemDelta, 0); EXPECT_EQ(0, noEffect.observedHealthDelta); (void)manager.evaluateSurvival(fixture.name);
+	auto paralysis=Condition::createCondition(CONDITIONID_COMBAT,CONDITION_PARALYZE,5000,0); ASSERT_TRUE(player->addCondition(paralysis)); player->learnInstantSpell("PlayerBot Test Cleanse"); BotHealingOption cleanse{.kind=BotHealingKind::ConditionRemoval,.spell="playerbot test cleanse",.manaCost=5,.removesConditions=1ULL<<3}; EXPECT_EQ(BotHealingOutcome::Pending,manager.executeHealing(fixture.name,cleanse,std::chrono::milliseconds(4)).outcome); const auto cleansed=manager.executeHealing(fixture.name,cleanse,std::chrono::milliseconds(5)); EXPECT_EQ(BotHealingOutcome::Succeeded,cleansed.outcome); EXPECT_FALSE(player->hasCondition(CONDITION_PARALYZE)); EXPECT_NE(0U,cleansed.removedConditions); (void)manager.evaluateSurvival(fixture.name);
+	CombatDamage secondDamage; secondDamage.primary={COMBAT_PHYSICALDAMAGE,-40}; ASSERT_TRUE(g_game().combatChangeHealth(nullptr,player,secondDamage)); player->learnInstantSpell("PlayerBot Test Healing"); const auto spellHealth=player->getHealth(); const auto spellMana=player->getMana(); BotHealingOption spell{.kind=BotHealingKind::SelfHealingSpell,.spell="playerbot test heal",.manaCost=10,.minimumHealing=30,.maximumHealing=30}; EXPECT_EQ(BotHealingOutcome::Pending,manager.executeHealing(fixture.name,spell,std::chrono::milliseconds(6)).outcome); const auto spellObserved=manager.executeHealing(fixture.name,spell,std::chrono::milliseconds(7)); EXPECT_EQ(BotHealingOutcome::Succeeded,spellObserved.outcome); EXPECT_EQ(spellHealth+30,player->getHealth()); EXPECT_EQ(spellMana-10,player->getMana()); EXPECT_LT(spellObserved.observedManaDelta,0); EXPECT_EQ(BotHealingOutcome::CooldownActive,manager.executeHealing(fixture.name,spell,std::chrono::milliseconds(8)).outcome); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup()); g_actions().clear();
+}
+
+TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerHealingRemainsAuthoritative) {
+	static const bool coreLoaded = g_scripts().loadEventSchedulerScripts("data/core.lua");
+	ASSERT_TRUE(coreLoaded);
+	g_actions().clear();
+	ASSERT_TRUE(g_scripts().loadEventSchedulerScripts("tests/fixture/playerbots/survival_actions.lua"));
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	const auto player = std::make_shared<Player>();
+	player->setName(fixture.name);
+	ASSERT_TRUE(IOLoginDataLoad::preLoadPlayer(player, fixture.name));
+	ASSERT_TRUE(IOLoginData::loadPlayerById(player, fixture.playerId, false));
+	player->setID();
+	player->setOnline(true);
+	ASSERT_TRUE(player->isNetworkControlled());
+	ASSERT_TRUE(g_game().placeCreature(player, fixture.start, false, true));
+	CombatDamage damage;
+	damage.primary = { COMBAT_PHYSICALDAMAGE, -50 };
+	ASSERT_TRUE(g_game().combatChangeHealth(nullptr, player, damage));
+	const auto beforeHealth = player->getHealth();
+	auto backpack = Item::CreateItem(ITEM_BACKPACK, 1);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(player, backpack, CONST_SLOT_BACKPACK, FLAG_NOLIMIT));
+	auto potion = Item::CreateItem(266, 2);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(backpack->getContainer(), potion, INDEX_WHEREEVER, FLAG_NOLIMIT));
+	ASSERT_TRUE(g_actions().useItemEx(player, potion->getPosition(), player->getPosition(), 0, potion, false, player));
+	EXPECT_EQ(beforeHealth + 40, player->getHealth());
+	EXPECT_EQ(1, potion->getItemCount());
+	player->setOnline(false);
+	const std::function<bool(const std::shared_ptr<Player> &)> noSave;
+	EXPECT_EQ(ManagedPlayerRemovalResult::Complete, g_game().removeManagedPlayer(player, true, noSave));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+	g_actions().clear();
+}
+
+TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerDeathStillUsesNormalCorpsePipeline) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	const auto deathTile = g_game().map.getTile(fixture.start);
+	ASSERT_NE(nullptr, deathTile);
+	const auto itemCount = deathTile->getItemCount();
+	const auto player = std::make_shared<Player>();
+	player->setName(fixture.name);
+	ASSERT_TRUE(IOLoginDataLoad::preLoadPlayer(player, fixture.name));
+	ASSERT_TRUE(IOLoginData::loadPlayerById(player, fixture.playerId, false));
+	player->setID();
+	player->setOnline(true);
+	ASSERT_TRUE(player->isNetworkControlled());
+	ASSERT_TRUE(g_game().placeCreature(player, fixture.start, false, true));
+	CombatDamage damage;
+	damage.primary = { COMBAT_PHYSICALDAMAGE, -player->getHealth() };
+	ASSERT_TRUE(g_game().combatChangeHealth(nullptr, player, damage));
+	EXPECT_EQ(0, player->getHealth());
+	EXPECT_FALSE(player->isRemoved());
+	EXPECT_GT(deathTile->getItemCount(), itemCount);
+	player->setOnline(false);
+	const std::function<bool(const std::shared_ptr<Player> &)> noSave;
+	EXPECT_EQ(ManagedPlayerRemovalResult::Complete, g_game().removeManagedPlayer(player, true, noSave));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
 }

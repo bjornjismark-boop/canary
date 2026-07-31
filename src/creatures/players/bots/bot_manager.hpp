@@ -46,6 +46,10 @@ public:
 	[[nodiscard]] BotTransitionResult cancelTransition(const std::string &name);
 	[[nodiscard]] BotTargetSelectionResult evaluateCombat(const std::string &name, const BotCombatPolicy &policy = {});
 	[[nodiscard]] BotCombatExecutionResult executeCombat(const std::string &name, const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy = {});
+	[[nodiscard]] BotSurvivalAssessment evaluateSurvival(const std::string &, const BotSurvivalPolicy & = {}, std::vector<BotHealingOption> = {});
+	[[nodiscard]] BotHealingResult executeHealing(const std::string &, const BotHealingOption &, std::chrono::milliseconds, const BotSurvivalPolicy & = {});
+	[[nodiscard]] BotFleeResult executeFlee(const std::string &, std::chrono::milliseconds, const BotSurvivalPolicy & = {});
+	[[nodiscard]] BotDeathResult observeDeath(const std::string &);
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

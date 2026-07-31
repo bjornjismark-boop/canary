@@ -58,6 +58,7 @@ public:
 	[[nodiscard]] const BotTransitionProgress *getTransitionProgress() const { return controller ? &controller->getTransitionProgress() : nullptr; }
 	[[nodiscard]] const BotTargetLock *getCombatLock() const { return controller ? &controller->getCombatLock() : nullptr; }
 	[[nodiscard]] const BotAttackExecutionState *getAttackExecutionState() const { return controller ? &controller->getAttackExecutionState() : nullptr; }
+	[[nodiscard]] const BotSurvivalProgress *getSurvivalProgress() const { return controller ? &controller->getSurvivalProgress() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -79,6 +80,10 @@ private:
 	[[nodiscard]] BotTransitionResult cancelTransition();
 	[[nodiscard]] BotTargetSelectionResult evaluateCombat(const BotCombatPolicy &policy);
 	[[nodiscard]] BotCombatExecutionResult executeCombat(const BotCombatExecutionRequest &request, std::chrono::milliseconds now, const BotCombatExecutionPolicy &policy);
+	[[nodiscard]] BotSurvivalAssessment evaluateSurvival(const BotSurvivalPolicy &, std::vector<BotHealingOption>);
+	[[nodiscard]] BotHealingResult executeHealing(const BotHealingOption &, std::chrono::milliseconds, const BotSurvivalPolicy &);
+	[[nodiscard]] BotFleeResult executeFlee(std::chrono::milliseconds, const BotSurvivalPolicy &);
+	[[nodiscard]] BotDeathResult observeDeath();
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

@@ -194,6 +194,11 @@ BotCombatExecutionResult BotSession::executeCombat(const BotCombatExecutionReque
 	return controller->executeCombat(request, now, policy);
 }
 
+BotSurvivalAssessment BotSession::evaluateSurvival(const BotSurvivalPolicy &p, std::vector<BotHealingOption> o) { if (state != BotSessionState::Placed || !controller) return { .urgency = BotSurvivalUrgency::Fatal, .decision = BotSurvivalDecision::Dead }; return controller->evaluateSurvival(p, std::move(o)); }
+BotHealingResult BotSession::executeHealing(const BotHealingOption &o, std::chrono::milliseconds n, const BotSurvivalPolicy &p) { if (state != BotSessionState::Placed || !controller) return { .outcome = BotHealingOutcome::InvalidLifecycle }; return controller->executeHealing(o, n, p); }
+BotFleeResult BotSession::executeFlee(std::chrono::milliseconds n, const BotSurvivalPolicy &p) { if (state != BotSessionState::Placed || !controller) return { .outcome = BotFleeOutcome::Cancelled }; return controller->executeFlee(n, p); }
+BotDeathResult BotSession::observeDeath() { if (!controller) return { .state = BotSurvivalState::Dead }; return controller->observeDeath(); }
+
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
 		return false;
@@ -267,7 +272,7 @@ bool BotSession::retryPendingSave() {
 }
 
 void BotSession::finishClose() {
-	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); controller->cancelCombat(); }
+	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); controller->cancelCombat(); controller->cancelSurvival(); }
 	controller.reset();
 	player.reset();
 	state = BotSessionState::Closed;

@@ -25,6 +25,8 @@ target_sources(
             players/animus_mastery/animus_mastery.cpp
             players/bots/bot_combat.cpp
             players/bots/bot_combat.hpp
+			players/bots/bot_survival.cpp
+			players/bots/bot_survival.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp

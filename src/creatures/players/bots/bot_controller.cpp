@@ -9,6 +9,7 @@
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/player.hpp"
 #include "creatures/combat/combat.hpp"
+#include "creatures/combat/spells.hpp"
 #include "game/game.hpp"
 #include "lua/creature/actions.hpp"
 #include "lib/logging/log_with_spd_log.hpp"
@@ -17,6 +18,90 @@ BotController::BotController(Game &game, const std::shared_ptr<Player> &player, 
 	game(game), player(player), limits(limits), decisionLog(std::move(decisionLog)) {
 }
 
+namespace {
+uint32_t carriedCount(Game &, const std::shared_ptr<Player> &player, uint16_t id) { return player ? std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(id) : 0; }
+std::optional<std::pair<BotSurvivalObservation, BotCombatObservation>> survivalObservation(const std::shared_ptr<Player> &player) {
+	const auto base = BotPerception::observe(player); if (!base) return std::nullopt;
+	const auto combat = BotCombat::observe(player, *base); if (!combat) return std::nullopt;
+	BotSurvivalObservation o { .revision = base->topologyRevision, .position = base->position, .health = base->health, .maxHealth = base->maxHealth, .mana = base->mana, .maxMana = base->maxMana, .healthPercent = BotSurvival::percentage(std::max(base->health, 0), std::max(base->maxHealth, 0)), .manaPercent = BotSurvival::percentage(base->mana, base->maxMana), .harmfulConditions = combat->self.activeConditions, .recentDamage = combat->self.recentDamage.amount, .dead = player->isRemoved() || base->health <= 0 };
+	for (const auto &c : combat->creatures) if (c.kind == BotCombatCreatureKind::Monster && c.visibility == BotCombatVisibility::Visible && !c.deadOrRemoved) { ++o.visibleHostiles; o.attacked = o.attacked || c.attackingBot; }
+	return std::pair(o, *combat);
+}
+}
+
+BotSurvivalAssessment BotController::evaluateSurvival(const BotSurvivalPolicy &policy, std::vector<BotHealingOption> options) {
+	const auto controlled = player.lock(); const auto observed = survivalObservation(controlled); if (!observed) return { .urgency = BotSurvivalUrgency::Fatal, .decision = BotSurvivalDecision::Dead };
+	if (observed->first.dead) { (void)observeDeath(); return { .urgency = BotSurvivalUrgency::Fatal, .decision = BotSurvivalDecision::Dead }; }
+	if (survivalProgress.state == BotSurvivalState::Failed || survivalProgress.state == BotSurvivalState::Recovering || survivalProgress.state == BotSurvivalState::Safe || survivalProgress.state == BotSurvivalState::Exhausted) survivalProgress = {};
+	const auto base = BotPerception::observe(controlled); const auto flee = base ? BotSurvival::selectFlee(*base, observed->second, policy) : BotFleeResult {};
+	return BotSurvival::assess(observed->first, policy, std::move(options), flee.outcome == BotFleeOutcome::SafePositionSelected);
+}
+
+BotHealingResult BotController::executeHealing(const BotHealingOption &option, std::chrono::milliseconds now, const BotSurvivalPolicy &policy) {
+	BotHealingResult result; const auto controlled = player.lock(); const auto observed = survivalObservation(controlled);
+	if (controlled && (controlled->isRemoved() || controlled->getHealth() <= 0)) { (void)observeDeath(); result.outcome = BotHealingOutcome::Dead; return result; }
+	if (!observed) { result.outcome = BotHealingOutcome::InvalidLifecycle; return result; }
+	if (observed->first.dead) { (void)observeDeath(); result.outcome = BotHealingOutcome::Dead; return result; }
+	if (survivalProgress.state == BotSurvivalState::Failed) { result.outcome = BotHealingOutcome::RetryExhausted; return result; }
+	if (survivalProgress.state == BotSurvivalState::Cancelled) { result.outcome = BotHealingOutcome::Cancelled; return result; }
+	if (survivalProgress.state == BotSurvivalState::Fleeing || survivalProgress.state == BotSurvivalState::FleePlanning) { result.outcome = BotHealingOutcome::WorldRejected; return result; }
+	if (survivalProgress.healing) {
+		result.request = *survivalProgress.healing; result.attempts = survivalProgress.attempts;
+		result.observedHealthDelta = observed->first.health - result.request.preHealth; result.observedManaDelta = static_cast<int32_t>(observed->first.mana) - static_cast<int32_t>(result.request.preMana); result.removedConditions = result.request.preConditions & ~observed->first.harmfulConditions;
+		if (option.itemTypeId) result.observedItemDelta = static_cast<int32_t>(result.request.preItemCount) - static_cast<int32_t>(carriedCount(game, controlled, option.itemTypeId));
+		const bool healingObserved = result.observedHealthDelta > 0
+			|| (result.request.option.kind == BotHealingKind::ManaPotion && result.observedManaDelta > 0)
+			|| result.removedConditions != 0;
+		if (healingObserved) { result.outcome = BotHealingOutcome::Succeeded; survivalProgress = { .state = BotSurvivalState::Recovering }; return result; }
+		if (now - survivalProgress.startedAt >= policy.timeout) { result.outcome = BotHealingOutcome::NoEffect; survivalProgress.state = BotSurvivalState::Failed; survivalProgress.healing.reset(); return result; }
+		result.outcome = BotHealingOutcome::Pending; return result;
+	}
+	if (option.kind == BotHealingKind::None || !option.requirementsMet) { result.outcome = BotHealingOutcome::RequirementNotMet; return result; }
+	if (option.cooldownActive) { survivalProgress.state = BotSurvivalState::Exhausted; result.outcome = BotHealingOutcome::CooldownActive; return result; }
+	uint32_t authoritativeManaCost = option.manaCost;
+	if (!option.spell.empty()) {
+		const auto spell = g_spells().getInstantSpell(option.spell);
+		if (!spell) { result.outcome = BotHealingOutcome::RequirementNotMet; return result; }
+		authoritativeManaCost = spell->getManaCost(controlled);
+		if (controlled->hasCondition(CONDITION_SPELLGROUPCOOLDOWN, spell->getGroup()) || controlled->hasCondition(CONDITION_SPELLCOOLDOWN, spell->getSpellId()) || (spell->getSecondaryGroup() != SPELLGROUP_NONE && controlled->hasCondition(CONDITION_SPELLGROUPCOOLDOWN, spell->getSecondaryGroup()))) { survivalProgress.state = BotSurvivalState::Exhausted; result.outcome = BotHealingOutcome::CooldownActive; return result; }
+		if (controlled->getLevel() < spell->getLevel() || controlled->getMagicLevel() < spell->getMagicLevel() || !spell->canCast(controlled)) { result.outcome = BotHealingOutcome::RequirementNotMet; return result; }
+	}
+	if (authoritativeManaCost > observed->first.mana) { result.outcome = BotHealingOutcome::MissingMana; return result; }
+	if (option.kind == BotHealingKind::ConditionRemoval && !(option.removesConditions & observed->first.harmfulConditions)) { result.outcome = BotHealingOutcome::ConditionNotPresent; return result; }
+	if (option.itemTypeId && carriedCount(game, controlled, option.itemTypeId) == 0) { result.outcome = BotHealingOutcome::MissingItem; return result; }
+	auto authoritativeOption = option; authoritativeOption.manaCost = authoritativeManaCost;
+	result.request = { authoritativeOption, observed->first.revision, observed->first.health, observed->first.mana, observed->first.harmfulConditions, option.itemTypeId ? carriedCount(game, controlled, option.itemTypeId) : 0 };
+	survivalProgress.state = BotSurvivalState::HealingRequired;
+	survivalProgress = { .state = BotSurvivalState::HealingPending, .healing = result.request, .attempts = 1, .startedAt = now, .nextActionAt = now + policy.initialBackoff };
+	cancelCombat(); (void)cancelRoute();
+	if (!option.spell.empty()) game.playerSay(controlled->getID(), 0, TALKTYPE_SAY, "", option.spell);
+	else if (option.itemTypeId) { const auto item = game.findItemOfType(controlled, option.itemTypeId, true); if (!item || !item->getParent()) { survivalProgress = {}; result.outcome = BotHealingOutcome::MissingItem; return result; } if (Item::items[item->getID()].triggerExhaustion() && !controlled->canDoPotionAction()) { survivalProgress = { .state = BotSurvivalState::Exhausted }; result.outcome = BotHealingOutcome::Exhausted; return result; } const auto from = item->getPosition(); const auto to = controlled->getPosition(); if (!g_actions().useItemEx(controlled, from, to, 0, item, false, controlled)) { survivalProgress.state = BotSurvivalState::Failed; survivalProgress.healing.reset(); result.outcome = BotHealingOutcome::WorldRejected; return result; } }
+	result.outcome = BotHealingOutcome::Pending; result.attempts = 1; return result;
+}
+
+BotFleeResult BotController::executeFlee(std::chrono::milliseconds now, const BotSurvivalPolicy &policy) {
+	const auto controlled = player.lock();
+	if (controlled && (controlled->isRemoved() || controlled->getHealth() <= 0)) { (void)observeDeath(); return { .outcome = BotFleeOutcome::Dead }; }
+	const auto observed = survivalObservation(controlled); if (!observed) return { .outcome = BotFleeOutcome::Cancelled };
+	if (observed->first.dead) { (void)observeDeath(); return { .outcome = BotFleeOutcome::Dead }; }
+	if (survivalProgress.state == BotSurvivalState::Failed) return { .outcome = BotFleeOutcome::RetryExhausted };
+	if (survivalProgress.state == BotSurvivalState::Cancelled) return { .outcome = BotFleeOutcome::Cancelled };
+	if (survivalProgress.healing) return { .outcome = BotFleeOutcome::Blocked };
+	if (survivalProgress.state == BotSurvivalState::Fleeing) { if (now - survivalProgress.startedAt >= policy.timeout) { (void)cancelRoute(); survivalProgress.state=BotSurvivalState::Failed; return { .outcome=BotFleeOutcome::TimedOut,.request=*survivalProgress.flee,.attempts=survivalProgress.attempts,.noProgress=survivalProgress.noProgress }; } auto progress = advanceRoute(now); const bool active = progress.state == BotRouteState::Ready || progress.state == BotRouteState::StepPending || progress.state == BotRouteState::ReplanRequired || progress.state == BotRouteState::Backoff; BotFleeResult r { .outcome = progress.state == BotRouteState::Arrived ? BotFleeOutcome::Safe : active ? BotFleeOutcome::Progressing : progress.reason == BotRouteReason::NoProgress ? BotFleeOutcome::NoProgress : BotFleeOutcome::Blocked, .request = *survivalProgress.flee, .attempts = survivalProgress.attempts, .noProgress = static_cast<uint8_t>(progress.consecutiveNoProgress) }; if (r.outcome == BotFleeOutcome::Safe) { const bool nearby=std::ranges::any_of(observed->second.creatures,[&](const auto &c){ return c.kind==BotCombatCreatureKind::Monster && c.visibility==BotCombatVisibility::Visible && !c.deadOrRemoved && std::max(Position::getDistanceX(controlled->getPosition(),c.position),Position::getDistanceY(controlled->getPosition(),c.position))<=2; }); if (nearby) { r.outcome=BotFleeOutcome::ThreatStillPresent; survivalProgress.state=BotSurvivalState::Failed; } else survivalProgress = { .state = BotSurvivalState::Safe }; } return r; }
+	survivalProgress.state = BotSurvivalState::FleeRequired;
+	const auto base = BotPerception::observe(controlled); if (!base) return { .outcome = BotFleeOutcome::Cancelled }; survivalProgress.state = BotSurvivalState::FleePlanning; auto result = BotSurvival::selectFlee(*base, observed->second, policy); if (result.outcome != BotFleeOutcome::SafePositionSelected) { survivalProgress.state = BotSurvivalState::Failed; return result; }
+	game.playerCancelAttackAndFollow(controlled->getID()); cancelCombat(); (void)cancelRoute(); (void)startRoute(result.request.destination, now, result.request.limits); survivalProgress = { .state = BotSurvivalState::Fleeing, .flee = result.request, .attempts = 1, .startedAt = now }; result.outcome = BotFleeOutcome::FleeStarted; return result;
+}
+
+BotDeathResult BotController::observeDeath() {
+	BotDeathResult result; const auto controlled = player.lock(); if (!controlled) { result.state = BotSurvivalState::Dead; return result; }
+	result.observation = { 0, controlled->getPosition(), controlled->getHealth(), controlled->isRemoved() || controlled->getHealth() <= 0 };
+	if (!result.observation.authoritativeDead) { result.state = survivalProgress.state; return result; }
+	survivalProgress.state = BotSurvivalState::DeathDetected; cancelCombat(); result.combatCancelled = true; (void)cancelRoute(); (void)cancelTransition(); result.movementCancelled = true; survivalProgress = { .state = BotSurvivalState::Dead, .death = result.observation }; result.state = BotSurvivalState::Dead; return result;
+}
+
+void BotController::cancelSurvival() { if (survivalProgress.state != BotSurvivalState::Dead) survivalProgress = { .state = BotSurvivalState::Cancelled }; }
+
 BotActionResult BotController::tick(std::chrono::milliseconds now) {
 	lastTickWork = 0;
 	if (now < nextTickAt) {
@@ -24,6 +109,7 @@ BotActionResult BotController::tick(std::chrono::milliseconds now) {
 	}
 	nextTickAt = now + limits.tickInterval;
 	const auto controlledPlayer = player.lock();
+	if (controlledPlayer && (controlledPlayer->isRemoved() || controlledPlayer->getHealth() <= 0)) { (void)observeDeath(); return { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle }; }
 	const auto observation = BotPerception::observe(controlledPlayer);
 	if (!observation) {
 		return { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle };
@@ -79,7 +165,8 @@ BotCombatExecutionResult BotController::executeCombat(const BotCombatExecutionRe
 		return BotCombatExecutionResult { outcome, failure, state, BotRangeAssessment::UnknownWeaponRange, request.targetCreatureId, world, attackExecution.assignmentAttempts };
 	};
 	const auto controlledPlayer = player.lock();
-	if (!controlledPlayer || !controlledPlayer->isBotControlled() || controlledPlayer->isRemoved() || !controlledPlayer->getTile()) return fail(BotCombatExecutionOutcome::InvalidLifecycle, BotAttackFailure::InvalidLifecycle, BotAttackState::Failed);
+	if (controlledPlayer && (controlledPlayer->isRemoved() || controlledPlayer->getHealth() <= 0)) { (void)observeDeath(); return fail(BotCombatExecutionOutcome::TargetLost, BotAttackFailure::InvalidTarget, BotAttackState::TargetLost); }
+	if (!controlledPlayer || !controlledPlayer->isBotControlled() || !controlledPlayer->getTile()) return fail(BotCombatExecutionOutcome::InvalidLifecycle, BotAttackFailure::InvalidLifecycle, BotAttackState::Failed);
 	if (request.targetCreatureId == 0 || combatLock.creatureId != request.targetCreatureId) return fail(BotCombatExecutionOutcome::InvalidTarget, BotAttackFailure::InvalidTarget, BotAttackState::Failed);
 	const bool live = attackExecution.state == BotAttackState::Validating || attackExecution.state == BotAttackState::AcquiringTarget || attackExecution.state == BotAttackState::AttackPending || attackExecution.state == BotAttackState::Repositioning;
 	if (live && attackExecution.request.targetCreatureId != request.targetCreatureId) return { BotCombatExecutionOutcome::Pending, BotAttackFailure::None, attackExecution.state, BotRangeAssessment::UnknownWeaponRange, attackExecution.request.targetCreatureId };

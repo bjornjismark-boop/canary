@@ -9,6 +9,7 @@
 #include "creatures/players/player.hpp"
 #include "creatures/players/bots/bot_runtime.hpp"
 #include "creatures/players/bots/bot_combat.hpp"
+#include "creatures/players/bots/bot_survival.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -426,3 +427,53 @@ TEST(PlayerBotCombatExecutionTest, CloseClearsExecutionState) { BotAttackExecuti
 TEST(PlayerBotCombatExecutionTest, NoDirectHealthOrManaMutationExists) { const BotCombatExecutionRequest request=executionRequest();EXPECT_EQ(42U,request.targetCreatureId); }
 TEST(PlayerBotCombatExecutionTest, NoDirectDamageOperationIsExposed) { EXPECT_TRUE(std::is_trivially_destructible_v<BotCombatExecutionRequest>); }
 TEST(PlayerBotCombatExecutionTest, IdenticalInputsProduceIdenticalPositioning) { auto o=executionCombat(1);auto base=routeObservation(Position(100,100,7),4);auto a=BotCombat::position(base,o,o.creatures[0],{},false);auto b=BotCombat::position(base,o,o.creatures[0],{},false);EXPECT_EQ(a.request.destination,b.request.destination);EXPECT_EQ(a.route.positions,b.route.positions); }
+
+namespace {
+BotSurvivalObservation survival(uint8_t health = 100) { return { .revision=1,.position=Position(100,100,7),.health=health,.maxHealth=100,.mana=100,.maxMana=100,.healthPercent=health,.manaPercent=100 }; }
+BotHealingOption heal() { return { .kind=BotHealingKind::HealthPotion,.itemTypeId=7618,.availableCount=1,.minimumHealing=100,.maximumHealing=200 }; }
+BotSurvivalAssessment assessSurvival(BotSurvivalObservation o, std::vector<BotHealingOption> h = {}, bool flee=false) { return BotSurvival::assess(o,{},std::move(h),flee); }
+}
+TEST(PlayerBotSurvivalTest, SurvivalObservationContainsValuesOnly) { EXPECT_TRUE(std::is_trivially_destructible_v<BotSurvivalObservation>); }
+TEST(PlayerBotSurvivalTest, SurvivalStateRetainsNoWorldOwnership) { BotSurvivalProgress p; EXPECT_FALSE(p.healing); EXPECT_FALSE(p.flee); }
+TEST(PlayerBotSurvivalTest, HealthPercentageIsDeterministic) { EXPECT_EQ(50,BotSurvival::percentage(5,10)); }
+TEST(PlayerBotSurvivalTest, ManaPercentageIsDeterministic) { EXPECT_EQ(33,BotSurvival::percentage(1,3)); }
+TEST(PlayerBotSurvivalTest, UrgencyIncreasesAtConfiguredHealthThresholds) { EXPECT_LT(assessSurvival(survival(70)).urgency,assessSurvival(survival(20)).urgency); }
+TEST(PlayerBotSurvivalTest, RecentDamageIncreasesUrgency) { auto a=survival();auto b=a;b.recentDamage=300;EXPECT_LT(assessSurvival(a).score.total,assessSurvival(b).score.total); }
+TEST(PlayerBotSurvivalTest, HarmfulConditionIncreasesUrgency) { auto a=survival();auto b=a;b.harmfulConditions=1;EXPECT_LT(assessSurvival(a).score.total,assessSurvival(b).score.total); }
+TEST(PlayerBotSurvivalTest, MultipleVisibleHostilesIncreaseUrgency) { auto a=survival();auto b=a;b.visibleHostiles=3;EXPECT_LT(assessSurvival(a).score.total,assessSurvival(b).score.total); }
+TEST(PlayerBotSurvivalTest, StableHealthyStateProducesNoSurvivalAction) { EXPECT_EQ(BotSurvivalDecision::None,assessSurvival(survival()).decision); }
+TEST(PlayerBotSurvivalTest, AvailableHealingOptionIsSelectedDeterministically) { EXPECT_EQ(7618,BotSurvival::selectHealing(survival(10),{}, {heal()}).itemTypeId); }
+TEST(PlayerBotSurvivalTest, UnavailableItemIsRejected) { auto h=heal();h.availableCount=0;EXPECT_EQ(BotHealingKind::None,BotSurvival::selectHealing(survival(10),{}, {h}).kind); }
+TEST(PlayerBotSurvivalTest, MissingManaIsRejected) { auto h=heal();h.itemTypeId=0;h.kind=BotHealingKind::SelfHealingSpell;h.manaCost=101;EXPECT_EQ(BotHealingKind::None,BotSurvival::selectHealing(survival(10),{}, {h}).kind); }
+TEST(PlayerBotSurvivalTest, CooldownPreventsHealingSpam) { auto h=heal();h.cooldownActive=true;EXPECT_EQ(BotHealingKind::None,BotSurvival::selectHealing(survival(10),{}, {h}).kind); }
+TEST(PlayerBotSurvivalTest, AcceptedHealingRequiresObservedResult) { BotHealingResult r{.outcome=BotHealingOutcome::Pending};EXPECT_NE(BotHealingOutcome::Succeeded,r.outcome); }
+TEST(PlayerBotSurvivalTest, AcceptedActionWithoutHealthChangeProducesNoEffect) { BotHealingResult r{.outcome=BotHealingOutcome::NoEffect,.observedHealthDelta=0};EXPECT_EQ(0,r.observedHealthDelta); }
+TEST(PlayerBotSurvivalTest, ConditionRemovalRequiresConditionToExist) { BotHealingOption h{.kind=BotHealingKind::ConditionRemoval,.spell="exana pox",.removesConditions=1};EXPECT_EQ(BotHealingKind::None,BotSurvival::selectHealing(survival(10),{}, {h}).kind); }
+TEST(PlayerBotSurvivalTest, OnePendingHealingActionSuppressesReplacement) { BotSurvivalProgress p{.state=BotSurvivalState::HealingPending,.healing=BotHealingRequest{}};EXPECT_TRUE(p.healing); }
+TEST(PlayerBotSurvivalTest, RetryBackoffIsCapped) { EXPECT_EQ(std::chrono::milliseconds(1600),BotSurvival::backoff({},30)); }
+TEST(PlayerBotSurvivalTest, RetryCountIsFinite) { EXPECT_EQ(3,BotSurvivalPolicy{}.maxAttempts); }
+TEST(PlayerBotSurvivalTest, CriticalUrgencyChoosesHealingWhenImmediatelyUsable) { EXPECT_EQ(BotSurvivalDecision::Heal,assessSurvival(survival(10),{heal()},true).decision); }
+TEST(PlayerBotSurvivalTest, CriticalUrgencyChoosesFleeWhenHealingUnavailable) { EXPECT_EQ(BotSurvivalDecision::Flee,assessSurvival(survival(10),{},true).decision); }
+TEST(PlayerBotSurvivalTest, LowUrgencyDoesNotInterruptCombat) { EXPECT_EQ(BotSurvivalDecision::None,assessSurvival(survival(70)).decision); }
+TEST(PlayerBotSurvivalTest, HealingAndFleeCannotExecuteConcurrently) { BotSurvivalProgress p{.state=BotSurvivalState::HealingPending,.healing=BotHealingRequest{}};EXPECT_NE(BotSurvivalState::Fleeing,p.state); }
+TEST(PlayerBotSurvivalTest, FleeCandidateEvaluationIsBounded) { EXPECT_EQ(128,BotSurvivalPolicy{}.maxCandidates); }
+TEST(PlayerBotSurvivalTest, HiddenThreatsDoNotInfluenceFleeScoring) { auto c=executionCombat(1);c.creatures[0].visibility=BotCombatVisibility::Hidden;auto o=routeObservation(Position(100,100,7),2);EXPECT_EQ(BotFleeOutcome::SafePositionSelected,BotSurvival::selectFlee(o,c,{}).outcome); }
+TEST(PlayerBotSurvivalTest, HarmfulDestinationLosesToSafeDestination) { auto c=executionCombat(1);auto o=routeObservation(Position(100,100,7),3);routeTile(o,Position(102,100,7)).hazardous=true;EXPECT_NE(Position(102,100,7),BotSurvival::selectFlee(o,c,{}).request.destination); }
+TEST(PlayerBotSurvivalTest, NoSafeDestinationIsExplicit) { BotObservation o{.position=Position(100,100,7)};EXPECT_EQ(BotFleeOutcome::NoSafeDestination,BotSurvival::selectFlee(o,executionCombat(1),{}).outcome); }
+TEST(PlayerBotSurvivalTest, FleeDistanceLimitIsEnforced) { EXPECT_EQ(8,BotSurvivalPolicy{}.maxFleeRadius); }
+TEST(PlayerBotSurvivalTest, NoProgressCountIsFinite) { EXPECT_EQ(2,BotSurvivalPolicy{}.maxNoProgress); }
+TEST(PlayerBotSurvivalTest, TargetAndFollowReleaseIsRequiredBeforeFlee) { EXPECT_TRUE(BotSurvival::legalTransition(BotSurvivalState::FleeRequired,BotSurvivalState::FleePlanning)); }
+TEST(PlayerBotSurvivalTest, DeathOverridesHealing) { EXPECT_EQ(BotSurvivalDecision::Dead,assessSurvival(survival(0),{heal()},true).decision); }
+TEST(PlayerBotSurvivalTest, DeathOverridesFlee) { EXPECT_EQ(BotSurvivalDecision::Dead,assessSurvival(survival(0),{},true).decision); }
+TEST(PlayerBotSurvivalTest, DeathClearsTargetLockContract) { EXPECT_TRUE(BotSurvival::legalTransition(BotSurvivalState::HealingPending,BotSurvivalState::DeathDetected)); }
+TEST(PlayerBotSurvivalTest, DeathCancelsCombatExecutionContract) { EXPECT_TRUE(BotSurvival::legalTransition(BotSurvivalState::Fleeing,BotSurvivalState::DeathDetected)); }
+TEST(PlayerBotSurvivalTest, DeathCancelsMovementStateContract) { EXPECT_TRUE(BotSurvival::legalTransition(BotSurvivalState::FleePlanning,BotSurvivalState::DeathDetected)); }
+TEST(PlayerBotSurvivalTest, DeadStateRejectsAllNewActions) { EXPECT_FALSE(BotSurvival::legalTransition(BotSurvivalState::Dead,BotSurvivalState::HealingRequired)); }
+TEST(PlayerBotSurvivalTest, SessionCloseCancelsSurvivalState) { BotSurvivalProgress p{.state=BotSurvivalState::Cancelled};EXPECT_TRUE(p.terminal()); }
+TEST(PlayerBotSurvivalTest, CancellationIsTerminal) { EXPECT_FALSE(BotSurvival::legalTransition(BotSurvivalState::Cancelled,BotSurvivalState::Stable)); }
+TEST(PlayerBotSurvivalTest, NoDirectHealthMutationExists) { EXPECT_TRUE(std::is_aggregate_v<BotHealingRequest>); }
+TEST(PlayerBotSurvivalTest, NoDirectManaMutationExists) { EXPECT_TRUE(std::is_aggregate_v<BotHealingResult>); }
+TEST(PlayerBotSurvivalTest, NoDirectConditionMutationExists) { EXPECT_TRUE(std::is_aggregate_v<BotDeathObservation>); }
+TEST(PlayerBotSurvivalTest, NoDirectPositionMutationExists) { EXPECT_TRUE(std::is_aggregate_v<BotFleeRequest>); }
+TEST(PlayerBotSurvivalTest, IdenticalInputsProduceIdenticalDecisions) { auto a=assessSurvival(survival(10),{heal()},true);auto b=assessSurvival(survival(10),{heal()},true);EXPECT_EQ(a.decision,b.decision);EXPECT_EQ(a.score,b.score); }
+TEST(PlayerBotSurvivalTest, ScoreArithmeticCannotOverflow) { auto o=survival(1);o.recentDamage=UINT32_MAX;o.visibleHostiles=UINT16_MAX;BotSurvivalPolicy p;p.recentDamageWeight=UINT32_MAX;p.hostileWeight=UINT32_MAX;EXPECT_EQ(p.scoreLimit,BotSurvival::assess(o,p,{},false).score.total); }
