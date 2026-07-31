@@ -164,10 +164,10 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 - [x] line of sight
 - [x] autoattack/follow-adapter
 - [x] cooldown-aware actions
-- [ ] configurable healing profile
-- [ ] emergency healing
-- [ ] flee destination
-- [ ] reträttvägsbedömning
+- [x] configurable healing profile
+- [x] emergency healing
+- [x] flee destination
+- [x] reträttvägsbedömning
 - [x] M3A flera observerade threats och bounded crowd-risk
 - [x] M3A advisory target invalidation och release intent
 
@@ -185,7 +185,7 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 ### Kvarvarande M3-arbete
 
 - [x] M3B — attack execution, cooldowns, range och combat positioning;
-- [ ] M3C — healing, survival, flee och death handling.
+- [x] M3C — healing, survival, flee och death handling.
 
 ### M3B evidens — authoritative combat execution
 
@@ -199,14 +199,26 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 - [x] source commit `702d61fc3`;
 - [x] slutreview: oavsiktlig PvP-opt-in blocker fixad; upprepad komplett gate utan blocker.
 
+### M3C evidens — survival och death handling
+
+- [x] värdebaserade observation-, policy-, score-, healing-, flee-, state- och death-kontrakt utan kvarhållen world ownership;
+- [x] deterministisk overflow-bounded urgency använder egen health/mana, recent damage, synliga hostiles, skadliga conditions, attacked-state och bounded escape-evidens;
+- [x] healing re-resolves verkliga items och spells, respekterar requirements, mana och cooldown/exhaustion samt kräver observerad health-, mana- eller condition-effekt före success;
+- [x] flee släpper attack/follow genom Canary, avbryter M3B och använder endast bounded M2-route med radius 8, route length 16, 128 candidates, tre attempts, två no-progress och fem sekunders timeout;
+- [x] authoritative death går `DeathDetected` till terminal `Dead`, avbryter M3A/M3B/M2 och ändrar inte corpse-, loss-, save- eller ordinary-player-regler;
+- [x] fokuserad gate: build 0, unit 167/167, databasbackad integration 40/40, diff 0;
+- [x] ordinary network-player healing och death/corpse-regressioner är gröna;
+- [x] M4-scope är explicit deferred: inga köp, restock, loot, depot, equipment, blessing, corpse recovery eller relog/respawn;
+- [ ] full M3 förblir öppen: normal creature-death experience attribution är inte testbevisad, och acceptance-raden som kombinerar akut offensivavbrott med loot kan inte slutföras före M4-loot.
+
 ### Acceptance
 
 - [x] botten attackerar bara tillåtna testmonsters;
 - [x] botten håller melee-avstånd;
-- [ ] healing respekterar mana, item count och cooldown;
-- [ ] healingkommando dupliceras inte före resultat;
+- [x] healing respekterar mana, item count och cooldown;
+- [x] healingkommando dupliceras inte före resultat;
 - [ ] akut health avbryter offensiv och loot;
-- [ ] botten kan lämna en farlig strid;
+- [x] botten kan lämna en farlig strid;
 - [ ] experience kommer från normal creature death.
 
 ---
