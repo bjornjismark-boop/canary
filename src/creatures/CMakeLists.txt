@@ -27,6 +27,8 @@ target_sources(
             players/bots/bot_controller.hpp
             players/bots/bot_manager.cpp
             players/bots/bot_manager.hpp
+			players/bots/bot_runtime.cpp
+			players/bots/bot_runtime.hpp
             players/bots/bot_session.cpp
             players/bots/bot_session.hpp
             players/grouping/familiars.cpp

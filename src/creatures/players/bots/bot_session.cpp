@@ -125,6 +125,20 @@ ReturnValue BotSession::move(Direction direction) {
 	return controller->move(direction);
 }
 
+BotActionResult BotSession::tick(std::chrono::milliseconds now) {
+	if (state != BotSessionState::Placed || !controller) {
+		return { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle };
+	}
+	return controller->tick(now);
+}
+
+BotActionResult BotSession::execute(const BotAction &action, std::chrono::milliseconds now) {
+	if (state != BotSessionState::Placed || !controller) {
+		return { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle };
+	}
+	return controller->execute(action, now);
+}
+
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
 		return false;

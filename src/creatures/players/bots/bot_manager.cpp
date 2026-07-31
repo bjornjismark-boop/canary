@@ -79,6 +79,20 @@ ReturnValue BotManager::move(const std::string &name, Direction direction) {
 	return it == sessions.end() ? RETURNVALUE_NOTPOSSIBLE : it->second->move(direction);
 }
 
+BotActionResult BotManager::tick(const std::string &name, std::chrono::milliseconds now) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end()
+		? BotActionResult { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle }
+		: it->second->tick(now);
+}
+
+BotActionResult BotManager::execute(const std::string &name, const BotAction &action, std::chrono::milliseconds now) {
+	const auto it = sessions.find(asLowerCaseString(name));
+	return it == sessions.end()
+		? BotActionResult { BotActionStatus::Rejected, BotActionFailure::InvalidLifecycle }
+		: it->second->execute(action, now);
+}
+
 bool BotManager::save(const std::string &name) {
 	const auto it = sessions.find(asLowerCaseString(name));
 	if (it == sessions.end()) {

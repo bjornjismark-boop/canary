@@ -51,6 +51,10 @@ public:
 		return state;
 	}
 
+	[[nodiscard]] const BotBlackboard *getBlackboard() const {
+		return controller ? &controller->getBlackboard() : nullptr;
+	}
+
 private:
 	friend class BotManager;
 
@@ -59,6 +63,8 @@ private:
 	[[nodiscard]] bool load(const std::string &name);
 	[[nodiscard]] bool place();
 	[[nodiscard]] ReturnValue move(Direction direction);
+	[[nodiscard]] BotActionResult tick(std::chrono::milliseconds now);
+	[[nodiscard]] BotActionResult execute(const BotAction &action, std::chrono::milliseconds now);
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

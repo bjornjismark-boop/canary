@@ -255,6 +255,72 @@ TEST(PlayerBotIntegrationTest, RunsDatabaseToMovementSaveAndRemovalLifecycle) {
 	EXPECT_FALSE(fixture.hasCommittedRows());
 }
 
+TEST(PlayerBotIntegrationTest, ObservesVisibleCreatureByValueAndRejectsStaleId) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	const Position observerPosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	createWalkableTile(observerPosition);
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	const auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	auto observer = std::make_shared<RemovalCountingCreature>();
+	observer->setID();
+	ASSERT_TRUE(g_game().placeCreature(observer, observerPosition, false, true));
+	std::weak_ptr<Creature> observerLifetime = observer;
+
+	const auto observation = BotPerception::observe(player);
+	ASSERT_TRUE(observation.has_value());
+	const auto found = std::ranges::find(observation->visibleCreatures, observer->getID(), &BotCreatureObservation::id);
+	ASSERT_NE(observation->visibleCreatures.end(), found);
+	EXPECT_EQ(observerPosition, found->position);
+	const BotAction pendingAction { BotActionType::InspectCreature, BotActionReason::ObserveTarget, player->getID() };
+	const auto pending = manager.execute(fixture.name, pendingAction, std::chrono::milliseconds(1000));
+	EXPECT_EQ(BotActionStatus::Pending, pending.status);
+	const auto noSpam = manager.execute(fixture.name, pendingAction, std::chrono::milliseconds(1250));
+	EXPECT_EQ(BotActionStatus::Pending, noSpam.status);
+	EXPECT_EQ(1U, noSpam.attempts);
+	const auto retry = manager.execute(fixture.name, pendingAction, std::chrono::milliseconds(2000));
+	EXPECT_EQ(BotActionStatus::RetryScheduled, retry.status);
+	EXPECT_EQ(BotActionFailure::TimedOut, retry.failure);
+	EXPECT_EQ(std::chrono::milliseconds(200), retry.retryAfter);
+	const auto staleId = observer->getID();
+	ASSERT_TRUE(g_game().removeCreature(observer, true));
+	observer.reset();
+	EXPECT_TRUE(observerLifetime.expired());
+
+	const auto staleResult = manager.execute(
+		fixture.name,
+		BotAction { BotActionType::InspectCreature, BotActionReason::ObserveTarget, staleId },
+		std::chrono::milliseconds(3000)
+	);
+	EXPECT_EQ(BotActionStatus::Rejected, staleResult.status);
+	EXPECT_EQ(BotActionFailure::InvalidTarget, staleResult.failure);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, TickAndActionRatesAreBoundedAndDoNotSpamPendingAction) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+
+	const auto first = manager.tick(fixture.name, std::chrono::milliseconds(1000));
+	EXPECT_EQ(BotActionStatus::Succeeded, first.status);
+	const auto rateLimited = manager.tick(fixture.name, std::chrono::milliseconds(1050));
+	EXPECT_EQ(BotActionFailure::RateLimited, rateLimited.failure);
+	ASSERT_NE(nullptr, session->getBlackboard());
+	EXPECT_FALSE(session->getBlackboard()->pendingAction.has_value());
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	const auto closed = manager.tick(fixture.name, std::chrono::milliseconds(2000));
+	EXPECT_EQ(BotActionFailure::InvalidLifecycle, closed.failure);
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
 TEST(PlayerBotIntegrationTest, SaveEnabledLogoutUsesOnlyInjectedSaveOperation) {
 	PlayerBotDatabaseFixture fixture(g_database());
 	const Position destination(fixture.start.x + 1, fixture.start.y, fixture.start.z);
@@ -352,6 +418,8 @@ TEST(PlayerBotIntegrationTest, SaveExceptionLeavesRemovedSessionPendingAndRetryO
 
 	EXPECT_FALSE(manager.logout(fixture.name, true));
 	EXPECT_EQ(BotSessionState::PendingSave, session->getState());
+	const auto blockedTick = manager.tick(fixture.name, std::chrono::milliseconds(1000));
+	EXPECT_EQ(BotActionFailure::InvalidLifecycle, blockedTick.failure);
 	EXPECT_EQ(1U, removalCallCount);
 	EXPECT_EQ(1U, saveCallCount);
 	EXPECT_FALSE(player->isOnline());

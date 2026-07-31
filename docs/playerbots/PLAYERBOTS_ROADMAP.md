@@ -53,29 +53,29 @@ Ge botten en säker och testbar beslutsloop utan att ännu implementera full nav
 
 ### Leverabler
 
-- [ ] `BotObservation`
-- [ ] `BotPerception`
-- [ ] stabila creature/item/position-referenser
-- [ ] inga långlivade starka world pointers i observationen
-- [ ] `BotAction`
-- [ ] `BotActionResult`
-- [ ] normaliserade reason codes
-- [ ] `BotBlackboard`
-- [ ] prioriterad state machine eller behavior-tree-root
-- [ ] begränsad tick scheduler
-- [ ] action-rate limit
-- [ ] timeout, retry och backoff
-- [ ] strukturerad rate-limitad logging
-- [ ] gameplay blockeras i pending-save och closed state
+- [x] `BotObservation`
+- [x] `BotPerception`
+- [x] stabila creature/item/position-referenser
+- [x] inga långlivade starka world pointers i observationen
+- [x] `BotAction`
+- [x] `BotActionResult`
+- [x] normaliserade reason codes
+- [x] `BotBlackboard`
+- [x] prioriterad state machine eller behavior-tree-root
+- [x] begränsad tick scheduler
+- [x] action-rate limit
+- [x] timeout, retry och backoff
+- [x] strukturerad rate-limitad logging
+- [x] gameplay blockeras i pending-save och closed state
 
 ### Acceptance
 
-- [ ] botten kan observera legitim närmiljö;
-- [ ] samma snapshot kan unit-testas deterministiskt;
-- [ ] stale creature-ID ger säkert `InvalidTarget`;
-- [ ] samma action spammas inte varje tick;
-- [ ] tick-budget kan mätas;
-- [ ] vanlig player behavior är oförändrad.
+- [x] botten kan observera legitim närmiljö;
+- [x] samma snapshot kan unit-testas deterministiskt;
+- [x] stale creature-ID ger säkert `InvalidTarget`;
+- [x] samma action spammas inte varje tick;
+- [x] tick-budget kan mätas;
+- [x] vanlig player behavior är oförändrad.
 
 ---
 
