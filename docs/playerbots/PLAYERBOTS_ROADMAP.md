@@ -286,25 +286,35 @@ Knyta ihop perception, navigation, combat, survival och loot till en autonom jak
 
 ### Leverabler
 
-- [ ] hunting-area definition
-- [ ] allowed monster profile
-- [ ] säker start- och returposition
-- [ ] hunt goal
-- [ ] kill/XP counters
-- [ ] supply/capacity exit conditions
-- [ ] death detection
+- [x] hunting-area definition
+- [x] allowed monster profile
+- [x] säker start- och returposition
+- [x] hunt goal
+- [x] kill/XP counters
+- [x] supply/capacity exit conditions
+- [x] death detection
 - [ ] temple recovery
 - [ ] resume efter recovery
 - [ ] save/logout genom M0
 
+M5A-evidens: en session-owned, value-only coordinator sekvenserar bounded lokal
+M2-travel, M3 target/attack, M3C survival/death precedence, M4 corpse/loot och
+M4C supply/return intents. En kompakt databas/world-fixture går från startregion
+till huntregion, tilldelar ett verkligt monster som target, går genom normal
+creature death med legitim XP, lootar ett verkligt item, observerar supplies,
+repathar runt en dynamisk blocker och återvänder. Separat verklig player death
+gör coordinatorn terminal och session close lämnar ingen retained ownership.
+Temple recovery, resume, långvarig progression och automatisk save/logout är
+fortsatt öppna; full M5 markeras därför inte komplett.
+
 ### Acceptance
 
 - [ ] bot dödar minst 10 testmonsters autonomt;
-- [ ] bot får legitim experience;
-- [ ] bot lootar minst ett konfigurerat item;
-- [ ] bot återvänder vid resursgräns;
+- [x] bot får legitim experience;
+- [x] bot lootar minst ett konfigurerat item;
+- [x] bot återvänder vid resursgräns;
 - [ ] bot överlever eller hanterar minst en death/recovery-cykel;
-- [ ] logout lämnar ingen world placement;
+- [x] logout lämnar ingen world placement;
 - [ ] ny login visar persisterad progression.
 
 ---
