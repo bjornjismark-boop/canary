@@ -594,6 +594,19 @@ the complete gate is build 0, unit 638/638, integration 109/109 and diff 0. Sour
 commit `f6bd6b97e`. No HTTP, GUI or MyAAC code was added. Full M9 remains open for
 M9D telemetry and final production hardening.
 
+M9D evidence (2026-08-01): immutable value-only fleet snapshots now expose
+aggregate lifecycle, planner/session and coordination health with bounded
+normalized failure buckets. Canary's existing metrics exporter receives only
+fixed metric names and bounded enum reason labels. A server-internal admin
+boundary defaults to disabled transport, permits only explicitly authenticated
+localhost/Unix-socket requests, bounds rate and payload sizes, exposes bounded
+audit/events and enqueues M9C writes with accepted-versus-completed semantics.
+Shutdown invalidates the service before fleet ownership teardown. Focused evidence
+is 10/10 unit plus one database/world lifecycle test; the complete gate is build
+0, unit 648/648, integration 110/110 and diff 0. Source commit `1128b35ea`.
+No HTTP, GUI, JavaScript or MyAAC code was added. Full M9 remains open for
+production soak and remaining release-hardening acceptance.
+
 ### Mål
 
 Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
@@ -607,7 +620,7 @@ Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
 - [x] fleet start/stop
 - [x] concurrency limits
 - [ ] global tick budget
-- [ ] metrics
+- [x] metrics
 - [ ] watchdog
 - [x] graceful shutdown
 - [x] server reload/restart
