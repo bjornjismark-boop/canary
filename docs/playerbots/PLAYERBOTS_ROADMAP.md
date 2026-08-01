@@ -150,7 +150,7 @@ Navigera på ett våningsplan och hantera vanliga lokala hinder genom normala Ca
 
 ---
 
-## [ ] M3 — Combat och Survival
+## [x] M3 — Combat och Survival
 
 ### Mål
 
@@ -209,7 +209,8 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 - [x] fokuserad gate: build 0, unit 167/167, databasbackad integration 40/40, diff 0;
 - [x] ordinary network-player healing och death/corpse-regressioner är gröna;
 - [x] M4-scope är explicit deferred: inga köp, restock, loot, depot, equipment, blessing, corpse recovery eller relog/respawn;
-- [ ] full M3 förblir öppen: normal creature-death experience attribution är inte testbevisad, och acceptance-raden som kombinerar akut offensivavbrott med loot kan inte slutföras före M4-loot.
+- [x] M5A:s verkliga monsterdeath-fixture bevisar normal creature-death experience attribution; M3D:s cross-subsystem contract stoppar nya transfers vid critical survival, inväntar och reconciliar en redan dispatchad ordinary move boundary, prioriterar healing/flee/death och kräver färska corpse- och inventoryobservationer före resume.
+- [x] M3D fokuserad evidens: 17 deterministiska priority/ownership-tester och databas/world-fixturen `CriticalSurvivalReconcilesAuthoritativeLootBoundaryBeforeHealingAndFreshResume`; komplett gate build 0, unit 239/239, integration 52/52, diff 0.
 
 ### Acceptance
 
@@ -217,9 +218,9 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 - [x] botten håller melee-avstånd;
 - [x] healing respekterar mana, item count och cooldown;
 - [x] healingkommando dupliceras inte före resultat;
-- [ ] akut health avbryter offensiv och loot;
+- [x] akut health avbryter offensiv och loot;
 - [x] botten kan lämna en farlig strid;
-- [ ] experience kommer från normal creature death.
+- [x] experience kommer från normal creature death.
 
 ---
 
