@@ -2273,6 +2273,13 @@ void Player::removeMagicEffect(const Position &pos, uint16_t type) const {
 }
 
 void Player::sendPing() {
+	// PlayerBots have an authoritative in-process controller and no network
+	// protocol to answer pings. Their lifetime is owned exclusively by
+	// BotManager/BotSession, including drain, save, logout, and shutdown.
+	if (!usesNetworkPingTimeout()) {
+		return;
+	}
+
 	const int64_t timeNow = OTSYS_TIME();
 
 	bool hasLostConnection = false;
@@ -2291,7 +2298,7 @@ void Player::sendPing() {
 		setAttackedCreature(nullptr);
 	}
 
-	if (noPongTime >= 60000 && shouldForceLogout) {
+	if (hasNetworkPingTimedOut(noPongTime) && shouldForceLogout) {
 		if (canLogout() && g_creatureEvents().playerLogout(static_self_cast<Player>())) {
 			g_logger().info("Player {} has been kicked due to ping timeout. (has client: {})", getName(), client != nullptr);
 			if (client) {

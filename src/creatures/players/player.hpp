@@ -516,6 +516,14 @@ public:
 		return controlType == PlayerControlType::Bot;
 	}
 
+	[[nodiscard]] bool usesNetworkPingTimeout() const {
+		return controlType == PlayerControlType::Network;
+	}
+
+	[[nodiscard]] bool hasNetworkPingTimedOut(int64_t noPongTime) const {
+		return usesNetworkPingTimeout() && noPongTime >= 60000;
+	}
+
 #ifdef BUILD_TESTS
 	void setTestIP(uint32_t testIpAddress) {
 		testIP = testIpAddress;

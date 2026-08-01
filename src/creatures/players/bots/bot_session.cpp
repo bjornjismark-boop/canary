@@ -130,6 +130,10 @@ bool BotSession::place() {
 		return false;
 	}
 
+	// Mirror the ordinary protocol login timestamp before the player can be
+	// saved. Leaving a database-loaded zero here makes online-time persistence
+	// overflow after a long-running managed session.
+	player->lastLoginSaved = std::max<time_t>(time(nullptr), player->lastLoginSaved + 1);
 	state = BotSessionState::Placed;
 	return true;
 }
