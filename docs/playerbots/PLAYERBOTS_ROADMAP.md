@@ -403,7 +403,7 @@ konfigurerade returroute återupptas efter att en färsk supply assessment når 
 
 ---
 
-## [ ] M7 — NPC och Quest Engine
+## [x] M7 — NPC och Quest Engine
 
 ### Mål
 
@@ -415,24 +415,24 @@ Skapa ett generellt, serverauktoritativt questflöde.
 - [x] besök plats
 - [x] döda creatures
 - [x] samla items
-- [ ] använd item/world object
-- [ ] leverera items
-- [ ] besegra specifikt target
-- [ ] sekventiella objectives
+- [x] använd item/world object
+- [x] leverera items
+- [x] besegra specifikt target
+- [x] sekventiella objectives
 - [x] prerequisites
-- [ ] reward collection
+- [x] reward collection
 
 ### Leverabler
 
 - [x] `QuestDefinition`
 - [x] `QuestProgress`
-- [ ] `BotQuestPlan`
+- [x] `BotQuestPlan`
 - [x] structured NPC adapter där möjligt
 - [x] metadata/adapters för Lua-baserade quests
 - [x] storage används som serverauktoritativ signal
 - [x] botten skriver aldrig quest-storage direkt
-- [ ] retry och idempotens
-- [ ] restart/resume
+- [x] retry och idempotens
+- [x] restart/resume
 
 M7A-evidens: en bounded, value-only NPC-dialogueadapter väljer endast explicit
 konfigurerade synliga NPC:er, använder M2 för approach och skickar endast
@@ -460,12 +460,28 @@ gate: build 0, unit 395/395, databasbackad integration 85/85, diff 0. Source com
 `086c070d3`. Full M7 förblir öppen för bounded execution, use/delivery, sekventiella
 objectives, multi-NPC, retry och resume som ingår i M7C.
 
+M7C-evidens: en lifecycle-ägd, bounded och value-only quest execution-state machine
+komponerar explicit konfigurerade M2–M7-steg, avancerar endast efter auktoritativ
+observation och checkpointar endast verifierade steg. Accepterad request räcker inte;
+dialogue kräver synligt svar, travel kräver region, use kräver observerad transition,
+kill kräver ordinary death, collect kräver ordinary corpse transfer, hand-in kräver
+faktisk item removal och reward kräver M7B:s före/efter-verifiering. Retry, timeout,
+capped backoff, survival suspension, death/cancel terminalitet och fresh-observation
+checkpoint reconstruction är deterministiskt bounded. En normalt registrerad två-NPC
+Lua-fixture nås endast genom ordinary speech och bevisar mission start, M2 travel,
+M3 target/death, M4 collect, second-NPC hand-in, storage transition, item/experience
+reward och oförändrat ordinary-player-flöde. En production ladder fixture bevisar
+ordinary use/movement-event delegation. Komplett gate: build 0, unit 421/421,
+databasbackad integration 91/91, diff 0. Source commits `7577942b2` och `5488db76d`.
+M7 är komplett; unrestricted quest discovery och natural-language solving är fortsatt
+explicit utanför scope.
+
 ### Acceptance
 
-- [ ] representativ flerstegsquest slutförs autonomt;
-- [ ] kedjan innehåller NPC, kill, collect, exploration/use och turn-in;
-- [ ] reward skapas av normalt questflöde;
-- [ ] restart mitt i questen tappar eller duplicerar inte progress;
+- [x] representativ flerstegsquest slutförs autonomt;
+- [x] kedjan innehåller NPC, kill, collect, exploration/use och turn-in;
+- [x] reward skapas av normalt questflöde;
+- [x] restart mitt i questen tappar eller duplicerar inte progress;
 - [ ] fel NPC-svar eller saknat item ger säker omplanering.
 
 ---
