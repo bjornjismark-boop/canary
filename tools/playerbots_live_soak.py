@@ -1,0 +1,475 @@
+#!/usr/bin/env python3
+"""Safe operator-side controller for a mixed PlayerBots live soak.
+
+The server-side observer and the ordinary client are deliberately explicit
+dependencies.  This controller never guesses a process, database, or client.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import os
+import re
+import shutil
+import shlex
+import signal
+import socket
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+MAX_DURATION = 7 * 24 * 60 * 60
+MAX_BOTS = 1024
+SECRET = re.compile(r"(?i)(pass(word)?|secret|token|credential|key)")
+TEST_NAME = re.compile(r"(?i)(test|playerbot|soak)")
+PRODUCTION_NAME = re.compile(r"(?i)^(canary|production|prod|live|otservbr-global)$")
+ARTIFACTS = (
+    "metadata.json", "environment-redacted.json", "server-command.txt", "server.log",
+    "client.log", "events.jsonl", "fleet-snapshots.jsonl", "sessions.csv", "rss.csv",
+    "ticks.csv", "commands.jsonl", "restarts.jsonl", "faults.json", "invariants.json",
+    "summary.json", "summary.md", "ticks.jsonl", "command-requests.jsonl",
+)
+
+
+class SoakError(RuntimeError):
+    pass
+
+
+def utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def load_env(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        raise SoakError("explicit environment file does not exist")
+    values: dict[str, str] = {}
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise SoakError(f"malformed environment line {number}")
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip("'\"")
+    return values
+
+
+def database_name(env: dict[str, str]) -> str:
+    names = {env.get(k, "") for k in ("SOAK_DB_NAME", "TEST_DB_NAME", "MYSQL_DATABASE") if env.get(k)}
+    if len(names) != 1:
+        raise SoakError("exactly one explicit test database identity is required")
+    name = names.pop()
+    if not re.fullmatch(r"[A-Za-z0-9_]+", name) or not TEST_NAME.search(name) or PRODUCTION_NAME.fullmatch(name):
+        raise SoakError("database identity is not visibly disposable")
+    if env.get("TEST_DB_ALLOW_RESET") != "1":
+        raise SoakError("TEST_DB_ALLOW_RESET=1 is required")
+    return name
+
+
+def redact(env: dict[str, str]) -> dict[str, str]:
+    return {key: "[redacted]" if SECRET.search(key) else value for key, value in sorted(env.items())}
+
+
+def proc_identity(pid: int, root: Path = Path("/proc")) -> str:
+    stat = (root / str(pid) / "stat").read_text(encoding="ascii")
+    close = stat.rfind(")")
+    fields = stat[close + 2:].split()
+    if close < 0 or len(fields) < 20:
+        raise SoakError("malformed process stat")
+    return fields[19]
+
+
+def parse_proc_status(text: str) -> tuple[int, int | None]:
+    found: dict[str, int] = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r"(VmRSS|VmHWM):\s+(\d+)\s+kB", line)
+        if match:
+            found[match.group(1)] = int(match.group(2))
+    if "VmRSS" not in found:
+        raise SoakError("VmRSS missing from process status")
+    return found["VmRSS"], found.get("VmHWM")
+
+
+def percentile(values: Iterable[int], fraction: float) -> int:
+    ordered = sorted(values)
+    if not ordered:
+        raise SoakError("latency series is empty")
+    rank = max(1, int((fraction * len(ordered)) + 0.999999999))
+    return ordered[rank - 1]
+
+
+def parse_tick_snapshot(line: str) -> dict[str, Any]:
+    try: value = json.loads(line)
+    except json.JSONDecodeError as exc: raise SoakError("malformed dispatcher snapshot") from exc
+    required = ("samples", "p50Us", "p95Us", "p99Us", "maxUs")
+    if any(not isinstance(value.get(key), int) or value[key] < 0 for key in required):
+        raise SoakError("invalid dispatcher snapshot")
+    if not value["p50Us"] <= value["p95Us"] <= value["p99Us"] <= value["maxUs"]:
+        raise SoakError("inconsistent dispatcher percentiles")
+    result = {key: value[key] for key in required}
+    if "buckets" in value or "bucketUpperBoundsUs" in value:
+        buckets=value.get("buckets"); bounds=value.get("bucketUpperBoundsUs")
+        if not isinstance(buckets,list) or not isinstance(bounds,list) or len(buckets)!=len(bounds)+1 or sum(buckets)!=value["samples"]:
+            raise SoakError("invalid dispatcher histogram")
+        result.update({"buckets":buckets,"bucketUpperBoundsUs":bounds})
+    return result
+
+
+def merged_histogram_percentile(ticks: list[dict[str, Any]], fraction: float) -> int:
+    supported=[item for item in ticks if "buckets" in item]
+    if not supported: raise SoakError("dispatcher histograms are missing")
+    bounds=supported[0]["bucketUpperBoundsUs"]; buckets=[0]*(len(bounds)+1); maximum=0
+    for item in supported:
+        if item["bucketUpperBoundsUs"]!=bounds: raise SoakError("dispatcher histogram bounds changed")
+        buckets=[left+right for left,right in zip(buckets,item["buckets"],strict=True)]; maximum=max(maximum,item["maxUs"])
+    total=sum(buckets)
+    if not total: raise SoakError("latency series is empty")
+    rank=max(1,int(fraction*total+0.999999999)); cumulative=0
+    for index,count in enumerate(buckets):
+        cumulative+=count
+        if cumulative>=rank: return bounds[index] if index<len(bounds) else maximum
+    return maximum
+
+
+def write_checksums(directory: Path) -> None:
+    with (directory / "SHA256SUMS").open("w", encoding="utf-8") as sums:
+        for name in ARTIFACTS:
+            data = (directory / name).read_bytes()
+            sums.write(f"{hashlib.sha256(data).hexdigest()}  {name}\n")
+
+
+def evaluate_adapter_artifacts(directory: Path, bots: int) -> tuple[int, list[str]]:
+    snapshots = [json.loads(line) for line in (directory / "fleet-snapshots.jsonl").read_text().splitlines() if line]
+    ticks = [parse_tick_snapshot(line) for line in (directory / "ticks.jsonl").read_text().splitlines() if line]
+    failures: list[str] = []
+    if not snapshots: failures.append("required_fleet_samples_missing")
+    if not ticks or not any(item["samples"] for item in ticks): failures.append("required_latency_samples_missing")
+    with (directory / "ticks.csv").open("w", newline="", encoding="utf-8") as output:
+        writer=csv.writer(output); writer.writerow(["samples","p50_us","p95_us","p99_us","max_us"])
+        for item in ticks: writer.writerow([item["samples"],item["p50Us"],item["p95Us"],item["p99Us"],item["maxUs"]])
+    with (directory / "invariants.json").open("w", encoding="utf-8") as output:
+        evaluations=[]
+        for snapshot in snapshots:
+            current=validate_snapshot(snapshot,bots); failures.extend(current)
+            evaluations.append({"timestamp":snapshot.get("timestampMilliseconds"),"result":"FAIL" if current else "PASS","failures":current})
+        json.dump({"evaluations":evaluations,"failures":sorted(set(failures))},output,indent=2); output.write("\n")
+    return len(ticks), sorted(set(failures))
+
+
+def validate_snapshot(s: dict[str, Any], bots: int) -> list[str]:
+    failures: list[str] = []
+    nonnegative = ("offline", "loginQueued", "loading", "placementPending", "placed", "draining",
+                   "saving", "logoutPending", "failed", "ordinaryPlayers", "lifecycleQueueDepth",
+                   "commandQueueDepth", "coordinationReservations")
+    for key in nonnegative:
+        if not isinstance(s.get(key), int) or s[key] < 0:
+            failures.append(f"invalid_state_count:{key}")
+    if s.get("duplicateSessions", 0): failures.append("duplicate_playerbot_session")
+    if s.get("managedSessions", 0) > s.get("hardMaximum", MAX_BOTS): failures.append("hard_maximum_exceeded")
+    if s.get("ordinaryInFleet", False): failures.append("ordinary_player_in_fleet")
+    if s.get("placed", 0) > s.get("managedSessions", 0): failures.append("placed_without_authoritative_session")
+    if s.get("managedSessions", 0) == 0 and s.get("coordinationReservations", 0): failures.append("stale_coordination_reservation")
+    if s.get("pressureState") == "critical" and s.get("newLogins", 0): failures.append("login_during_critical_overload")
+    if s.get("lifecycleQueueDepth", 0) > max(64, bots * 4): failures.append("unbounded_lifecycle_queue")
+    if s.get("commandQueueDepth", 0) > 64: failures.append("unbounded_command_queue")
+    return failures
+
+
+def check_loopback_config(path: Path) -> None:
+    if not path.is_file() or path.name != "config.lua":
+        raise SoakError("--config must be an explicit config.lua")
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r'^\s*ip\s*=\s*["\']([^"\']+)', text, re.MULTILINE)
+    if not match or match.group(1) not in ("127.0.0.1", "::1", "localhost"):
+        raise SoakError("test configuration must bind to loopback")
+
+
+def lua_string(value: str) -> str:
+    if "\n" in value or "\r" in value or "\0" in value:
+        raise SoakError("configuration value contains a forbidden control character")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def allocate_ports(count: int = 3) -> list[int]:
+    sockets: list[socket.socket] = []
+    try:
+        for _ in range(count):
+            item = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            item.bind(("127.0.0.1", 0)); sockets.append(item)
+        return [item.getsockname()[1] for item in sockets]
+    finally:
+        for item in sockets: item.close()
+
+
+def create_runtime_directory(source_config: Path, run_directory: Path, repo: Path,
+                             env: dict[str, str], db_name: str, bots: int) -> tuple[Path, dict[str, int]]:
+    check_loopback_config(source_config)
+    runtime = run_directory / "runtime"
+    runtime.mkdir(mode=0o700)
+    ports = dict(zip(("login", "game", "status"), allocate_ports(), strict=True))
+    for name in ("data", "data-canary", "data-otservbr-global", "key.pem"):
+        source = repo / name
+        if source.exists(): (runtime / name).symlink_to(source, target_is_directory=source.is_dir())
+    (runtime / "config").mkdir(mode=0o700)
+    config = source_config.read_text(encoding="utf-8")
+    overrides = {
+        "ip": "127.0.0.1", "loginProtocolPort": ports["login"], "gameProtocolPort": ports["game"],
+        "statusProtocolPort": ports["status"], "mysqlHost": env.get("TEST_DB_HOST", "127.0.0.1"),
+        "mysqlUser": env["TEST_DB_USER"], "mysqlPass": env["TEST_DB_PASSWORD"], "mysqlDatabase": db_name,
+        "mysqlPort": int(env.get("TEST_DB_PORT", "3306")), "mysqlSock": env.get("TEST_DB_SOCKET", ""),
+        "allowOldProtocol": True,
+    }
+    rendered = [config, "\n-- Generated by playerbots_live_soak.py; disposable loopback run only.\n"]
+    for key, value in overrides.items():
+        if isinstance(value, bool): encoded = "true" if value else "false"
+        elif isinstance(value, int): encoded = str(value)
+        else: encoded = lua_string(value)
+        rendered.append(f"{key} = {encoded}\n")
+    generated = runtime / "config.lua"
+    generated.write_text("".join(rendered), encoding="utf-8"); generated.chmod(0o600)
+    members = [{"id": 10001 + index, "name": f"Soak Bot {index + 1}", "vocationCategory": (index % 4) + 1,
+                "levelRangeCategory": 1, "plannerPolicyId": 1, "coordinationGroupId": 1,
+                "roleId": 1, "partyProfileId": 1, "allowedRegionIds": [1], "priority": 1}
+               for index in range(bots)]
+    fleet = {"schemaVersion": 1, "revision": 1,
+             "population": {"enabled": True, "desiredOnline": bots, "minimumOnline": 0,
+                            "maximumOnline": bots, "absoluteHardMaximum": max(bots, 4),
+                            "maximumLoginsPerInterval": 1, "maximumLogoutsPerInterval": 1,
+                            "maximumPendingLogins": 1, "maximumPendingLogouts": 1,
+                            "maximumRetries": 3, "startupDelayTicks": 2000,
+                            "maximumRetryBackoffTicks": 64, "drainTimeoutTicks": 1024,
+                            "drainTarget": 0, "maximumSessionTicks": 0,
+                            "overloadRecoveryIntervals": 2, "revision": 1, "overloadPause": True},
+             "distribution": [], "members": members, "schedule": []}
+    (runtime / "config" / "playerbots.json").write_text(json.dumps(fleet, indent=2) + "\n", encoding="utf-8")
+    return runtime, ports
+
+
+class DatabaseLifecycle:
+    def __init__(self, env: dict[str, str], unique_name: str, run_directory: Path, bots: int):
+        self.env, self.name, self.run_directory = env, unique_name, run_directory
+        self.bots = bots
+        self.client = env.get("TEST_DB_CLIENT") or shutil.which("mysql") or shutil.which("mariadb")
+        if not self.client: raise SoakError("mysql or mariadb client is required")
+        self.defaults = run_directory / "mysql-client.cnf"
+
+    def _write_defaults(self) -> None:
+        lines = ["[client]", f"host={self.env.get('TEST_DB_HOST', '127.0.0.1')}",
+                 f"user={self.env['TEST_DB_USER']}", f"password={self.env['TEST_DB_PASSWORD']}",
+                 f"port={self.env.get('TEST_DB_PORT', '3306')}"]
+        if self.env.get("TEST_DB_SOCKET"): lines.append(f"socket={self.env['TEST_DB_SOCKET']}")
+        self.defaults.write_text("\n".join(lines) + "\n", encoding="utf-8"); self.defaults.chmod(0o600)
+
+    def _run(self, *args: str, stdin=None) -> None:
+        completed = subprocess.run([self.client, f"--defaults-extra-file={self.defaults}", *args], stdin=stdin,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=stdin is None)
+        if completed.returncode:
+            detail = completed.stderr.decode(errors="replace") if isinstance(completed.stderr, bytes) else completed.stderr
+            raise SoakError("disposable database command failed: " + detail[-400:])
+
+    def create(self) -> None:
+        self._write_defaults()
+        try:
+            self._run("--execute", f"CREATE DATABASE `{self.name}` CHARACTER SET utf8")
+            schema = Path(self.env["TEST_DB_SCHEMA"])
+            if not schema.is_file(): raise SoakError("TEST_DB_SCHEMA does not exist")
+            with schema.open("rb") as source: self._run(self.name, stdin=source)
+            fixtures = []
+            for index in range(self.bots):
+                fixture_id = 10001 + index
+                name = f"Soak Bot {index + 1}"
+                fixtures.append(f"INSERT INTO accounts (id,name,email,password) VALUES ({fixture_id},'soak_bot_{index + 1}','bot{index + 1}@test.invalid','');")
+                fixtures.append("INSERT INTO players (id,name,account_id,group_id,vocation,town_id,health,healthmax,mana,manamax,cap,conditions,posx,posy,posz,deletion) "
+                                f"VALUES ({fixture_id},'{name}',{fixture_id},1,1,1,150,150,100,100,100000,X'',0,0,0,0);")
+            self._run("--execute", "".join(fixtures), self.name)
+        except Exception:
+            try: self._run("--execute", f"DROP DATABASE IF EXISTS `{self.name}`")
+            except Exception: pass
+            self.defaults.unlink(missing_ok=True)
+            raise
+
+    def cleanup(self) -> None:
+        if not self.defaults.exists(): self._write_defaults()
+        self._run("--execute", f"DROP DATABASE IF EXISTS `{self.name}`")
+        self.defaults.unlink(missing_ok=True)
+
+
+def make_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser()
+    p.add_argument("--env", type=Path, required=True)
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--server", type=Path, required=True)
+    p.add_argument("--profile", choices=("smoke", "release"), required=True)
+    p.add_argument("--duration-seconds", type=int, required=True)
+    p.add_argument("--bots", type=int, required=True)
+    p.add_argument("--restarts", type=int, default=1)
+    p.add_argument("--output-root", type=Path, required=True)
+    p.add_argument("--sample-seconds", type=float, default=1.0)
+    p.add_argument("--keep-database-on-failure", action="store_true")
+    p.add_argument("--allow-no-client", action="store_true", help=argparse.SUPPRESS)
+    return p
+
+
+@dataclass
+class Run:
+    args: argparse.Namespace
+    env: dict[str, str]
+    directory: Path
+    server: subprocess.Popen[bytes] | None = None
+    identity: str = ""
+    failed: bool = False
+    runtime: Path | None = None
+    status_port: int = 0
+
+    def event(self, kind: str, **fields: Any) -> None:
+        with (self.directory / "events.jsonl").open("a", encoding="utf-8") as out:
+            out.write(json.dumps({"timestamp": utc(), "kind": kind, **fields}, sort_keys=True) + "\n")
+
+    def start(self) -> None:
+        snapshot = self.directory / "fleet-snapshots.jsonl"
+        previous_size = snapshot.stat().st_size if snapshot.exists() else 0
+        log = (self.directory / "server.log").open("ab", buffering=0)
+        child_env = {**os.environ, **self.env, "PLAYERBOTS_SOAK_OUTPUT": str(self.directory), "PLAYERBOTS_SOAK_BOTS": str(self.args.bots)}
+        self.server = subprocess.Popen([str(self.args.server)], cwd=self.runtime, env=child_env,
+                                       stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+        self.identity = proc_identity(self.server.pid)
+        (self.directory / "server-command.txt").write_text(shlex.join([str(self.args.server)]) + "\n", encoding="utf-8")
+        self.event("server_started", pid=self.server.pid, startIdentity=self.identity)
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if self.server.poll() is not None: raise SoakError("server terminated before readiness")
+            if snapshot.exists() and snapshot.stat().st_size > previous_size: return
+            time.sleep(.25)
+        raise SoakError("server readiness timeout")
+
+    def stop(self) -> None:
+        if not self.server or self.server.poll() is not None: return
+        if proc_identity(self.server.pid) != self.identity: raise SoakError("PID identity changed")
+        os.kill(self.server.pid, signal.SIGTERM)
+        try: self.server.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            os.kill(self.server.pid, signal.SIGKILL)
+            self.server.wait(timeout=10)
+
+    def sample(self, writer: csv.writer) -> None:
+        assert self.server
+        if self.server.poll() is not None: raise SoakError("unexpected server termination")
+        if proc_identity(self.server.pid) != self.identity: raise SoakError("PID identity changed")
+        rss, hwm = parse_proc_status(Path(f"/proc/{self.server.pid}/status").read_text(encoding="ascii"))
+        writer.writerow([utc(), self.server.pid, self.identity, rss, "" if hwm is None else hwm])
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = make_parser().parse_args(argv)
+    if not args.server.is_file() or not os.access(args.server, os.X_OK): raise SoakError("server must be one explicit executable file")
+    if not 1 <= args.duration_seconds <= MAX_DURATION: raise SoakError("duration outside finite safety bounds")
+    if not 1 <= args.bots <= MAX_BOTS: raise SoakError("bot population outside compiled hard maximum")
+    if not 0.1 <= args.sample_seconds <= 60: raise SoakError("sample interval outside bounded safety limits")
+    if args.profile == "release" and args.restarts < 3: raise SoakError("release profile requires at least three restarts")
+    check_loopback_config(args.config)
+    env = load_env(args.env)
+    db = database_name(env)
+    for key in ("TEST_DB_USER", "TEST_DB_PASSWORD", "TEST_DB_SCHEMA"):
+        if not env.get(key): raise SoakError(f"{key} is required")
+    if not env.get("SOAK_CLIENT_COMMAND") and not args.allow_no_client: raise SoakError("SOAK_CLIENT_COMMAND is required")
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}"
+    directory = args.output_root / run_id
+    directory.mkdir(parents=True, mode=0o700, exist_ok=False)
+    directory.chmod(0o700)
+    for name in ARTIFACTS: (directory / name).touch()
+    unique_db = f"{db}_live_{run_id.replace('-', '_')}"
+    database = DatabaseLifecycle(env, unique_db, directory, args.bots)
+    runtime, ports = create_runtime_directory(args.config, directory, Path(__file__).resolve().parents[1], env, unique_db, args.bots)
+    run = Run(args, env, directory, runtime=runtime, status_port=ports["status"])
+    def interrupted(signum, _frame): raise SoakError(f"received signal {signum}")
+    signal.signal(signal.SIGINT, interrupted); signal.signal(signal.SIGTERM, interrupted)
+    exit_code = 1
+    client: subprocess.Popen[bytes] | None = None
+    try:
+        (directory / "environment-redacted.json").write_text(json.dumps(redact(env), indent=2) + "\n", encoding="utf-8")
+        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        metadata = {"runId": run_id, "gitCommit": commit, "database": unique_db,
+                    "executable": str(args.server.resolve()), "commandLine": [str(args.server.resolve())],
+                    "profile": args.profile, "durationSeconds": args.duration_seconds,
+                    "bots": args.bots, "productionSoak": False}
+        (directory / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+        database.create()
+        def start_client():
+            if not env.get("SOAK_CLIENT_COMMAND"): return None
+            client_log = (directory / "client.log").open("ab", buffering=0)
+            return subprocess.Popen(shlex.split(env["SOAK_CLIENT_COMMAND"]), cwd=runtime,
+                                    env={**os.environ, **env, "SOAK_GAME_PORT": str(ports["game"]), "SOAK_LOGIN_PORT": str(ports["login"])}, stdout=client_log, stderr=subprocess.STDOUT)
+        with (directory / "rss.csv").open("w", newline="", encoding="utf-8") as rss_file:
+            writer = csv.writer(rss_file); writer.writerow(["timestamp", "pid", "start_identity", "vmrss_kb", "vmhwm_kb"])
+            run.start()
+            metadata.update({"pid": run.server.pid if run.server else None, "processStartIdentity": run.identity,
+                             "runtimeDirectory": str(runtime), "ports": ports})
+            (directory / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+            client = start_client()
+            deadline = time.monotonic() + args.duration_seconds
+            while time.monotonic() < deadline:
+                if client and client.poll() is not None: raise SoakError("ordinary protocol client terminated unexpectedly")
+                run.sample(writer); rss_file.flush(); time.sleep(args.sample_seconds)
+            for restart in range(args.restarts):
+                if client:
+                    client.terminate(); client.wait(timeout=10); client=None
+                run.stop(); run.start(); client=start_client(); time.sleep(min(3.0,args.sample_seconds * 2)); run.sample(writer)
+                if client and client.poll() is not None: raise SoakError("ordinary protocol client failed to reconnect")
+                with (directory/"restarts.jsonl").open("a",encoding="utf-8") as output:
+                    output.write(json.dumps({"timestamp":utc(),"restart":restart+1,"result":"PASS"})+"\n")
+                run.event("restart_completed", restart=restart + 1)
+            run.sample(writer)
+        _, invariant_failures=evaluate_adapter_artifacts(directory,args.bots)
+        if invariant_failures: raise SoakError("invariant failure: " + ",".join(invariant_failures))
+        if client: client.terminate(); client.wait(timeout=10)
+        run.stop(); database.cleanup()
+        exit_code = 0
+    except Exception as exc:
+        run.failed = True; run.event("failure", failure=type(exc).__name__, detail=str(exc))
+        if client and client.poll() is None: client.terminate()
+        try: run.stop()
+        except Exception: pass
+        if not args.keep_database_on_failure:
+            try: database.cleanup()
+            except Exception: pass
+    finally:
+        rss_values=[]
+        try:
+            with (directory/"rss.csv").open(newline="",encoding="utf-8") as source:
+                rss_values=[int(row["vmrss_kb"]) for row in csv.DictReader(source)]
+        except (OSError,ValueError,KeyError): pass
+        tick_values=[]
+        try: tick_values=[parse_tick_snapshot(line) for line in (directory/"ticks.jsonl").read_text().splitlines() if line]
+        except (OSError,SoakError): pass
+        summary = {"result": "FAIL" if run.failed else "PASS", "gitCommit": subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),
+                   "executable":str(args.server.resolve()), "profile": args.profile, "durationSeconds":args.duration_seconds,
+                   "configuredBots":args.bots, "humanParticipants":1 if env.get("SOAK_CLIENT_COMMAND") else 0,
+                   "restartCount":sum(1 for line in (directory/"restarts.jsonl").read_text().splitlines() if line),
+                   "rssInitialKb":rss_values[0] if rss_values else None,"rssPeakKb":max(rss_values) if rss_values else None,
+                   "rssFinalKb":rss_values[-1] if rss_values else None,"tickSampleCount":sum(item["samples"] for item in tick_values),
+                   "tickP50Us":merged_histogram_percentile(tick_values,.50) if tick_values and sum(item["samples"] for item in tick_values) else None,
+                   "tickP95Us":merged_histogram_percentile(tick_values,.95) if tick_values and sum(item["samples"] for item in tick_values) else None,
+                   "tickP99Us":merged_histogram_percentile(tick_values,.99) if tick_values and sum(item["samples"] for item in tick_values) else None,
+                   "tickMaxUs":max((item["maxUs"] for item in tick_values),default=None), "productionSoak": False,
+                   "mode":"live_mixed" if env.get("SOAK_CLIENT_COMMAND") else "live_server_only",
+                   "releaseSoak": "NOT_RUN",
+                   "liveSmoke": ("PASS" if env.get("SOAK_CLIENT_COMMAND") else "PARTIAL_SERVER_ONLY") if not run.failed and args.profile == "smoke" else "NOT_RUN"}
+        (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        (directory / "summary.md").write_text("# PlayerBots live soak\n\n"+"\n".join(f"{key}: {value}" for key,value in summary.items())+"\n\nPRODUCTION_SOAK=NO\n", encoding="utf-8")
+        write_checksums(directory)
+        print(f"SOAK_OUTPUT={directory}")
+    return exit_code
+
+
+if __name__ == "__main__":
+    try: raise SystemExit(main())
+    except SoakError as exc:
+        print(f"playerbots-live-soak: {exc}", file=sys.stderr); raise SystemExit(64)
