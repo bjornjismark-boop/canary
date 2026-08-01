@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "creatures/players/bots/bot_coordination.hpp"
 #include "creatures/players/bots/bot_session.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
@@ -69,6 +70,15 @@ public:
 	[[nodiscard]] BotQuestEligibility evaluateQuest(const std::string &, BotMissionId, const BotQuestDefinition &, const BotNpcDialoguePolicy & = {}, const BotQuestBounds & = {});
 	[[nodiscard]] BotQuestExecutionResult startQuestExecution(const std::string &, const BotQuestPlan &, const BotQuestExecutionPolicy & = {});
 	[[nodiscard]] BotQuestExecutionResult advanceQuestExecution(const std::string &, const BotQuestPlan &, const BotQuestStepObservation &, const BotQuestExecutionPolicy & = {});
+	[[nodiscard]] BotCoordinationFailure configureCoordinationGroup(BotCoordinationPolicy);
+	[[nodiscard]] BotCoordinationGroupObservation observeCoordinationGroup(BotCoordinationGroupId);
+	[[nodiscard]] BotCoordinationDecision evaluateCoordinationGroup(BotCoordinationGroupId);
+	[[nodiscard]] BotCoordinationFailure reserveCoordinationTarget(BotCoordinationReservation, uint64_t now);
+	void invalidateCoordinationTarget(BotCoordinationGroupId, BotCoordinationReservationType, uint64_t targetSignature);
+	[[nodiscard]] BotRouteProgress executeCoordinationMovement(const std::string &, const BotCoordinationIntent &, std::chrono::milliseconds now, BotRouteLimits limits = {});
+	[[nodiscard]] size_t coordinationGroupCount() const { return coordinationGroups.size(); }
+	[[nodiscard]] size_t coordinationReservationCount(BotCoordinationGroupId) const;
+	void clearCoordination();
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();
@@ -78,4 +88,6 @@ private:
 	Game &game;
 	BotSessionOperations operations;
 	std::unordered_map<std::string, std::shared_ptr<BotSession>> sessions;
+	std::unordered_map<BotCoordinationGroupId, BotCoordinationGroupState> coordinationGroups;
+	std::unordered_map<BotCoordinationMemberId, uint64_t> sessionGenerations;
 };

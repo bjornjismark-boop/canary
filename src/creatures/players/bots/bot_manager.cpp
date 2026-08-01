@@ -7,6 +7,8 @@
 #include "creatures/players/bots/bot_manager.hpp"
 
 #include "creatures/players/bots/bot_session.hpp"
+#include "creatures/players/grouping/party.hpp"
+#include "creatures/players/player.hpp"
 #include "game/game.hpp"
 #include "lib/logging/log_with_spd_log.hpp"
 #include "utils/tools.hpp"
@@ -17,6 +19,7 @@ BotManager::BotManager(Game &game, BotSessionOperations operations) :
 
 BotManager::~BotManager() noexcept {
 	try {
+		clearCoordination();
 		bool success = true;
 		for (const auto &[name, session] : sessions) {
 			if (!session->close(false)) {
@@ -59,6 +62,10 @@ std::shared_ptr<const BotSession> BotManager::login(const std::string &name) {
 		return nullptr;
 	}
 	sessions.emplace(key, session);
+	auto &generation = sessionGenerations[session->player->getGUID()];
+	if (generation != std::numeric_limits<uint64_t>::max()) {
+		++generation;
+	}
 	return session;
 }
 
@@ -67,8 +74,13 @@ bool BotManager::logout(const std::string &name, bool savePlayer) {
 	if (it == sessions.end()) {
 		return false;
 	}
+	const auto memberId = it->second->player ? it->second->player->getGUID() : 0;
 	if (!it->second->close(savePlayer)) {
 		return false;
+	}
+	for (auto &[groupId, group] : coordinationGroups) {
+		(void)groupId;
+		BotCoordination::invalidate(group.reservations, memberId);
 	}
 	sessions.erase(it);
 	return true;
@@ -115,8 +127,13 @@ bool BotManager::save(const std::string &name) {
 	if (it->second->getState() != BotSessionState::PendingSave) {
 		return it->second->save();
 	}
+	const auto memberId = it->second->player ? it->second->player->getGUID() : 0;
 	if (!it->second->close(true)) {
 		return false;
+	}
+	for (auto &[groupId, group] : coordinationGroups) {
+		(void)groupId;
+		BotCoordination::invalidate(group.reservations, memberId);
 	}
 	sessions.erase(it);
 	return true;
@@ -130,12 +147,20 @@ std::shared_ptr<const BotSession> BotManager::getSession(const std::string &name
 bool BotManager::clear(bool savePlayers) {
 	bool success = true;
 	for (auto it = sessions.begin(); it != sessions.end();) {
+		const auto memberId = it->second->player ? it->second->player->getGUID() : 0;
 		if (it->second->close(savePlayers)) {
+			for (auto &[groupId, group] : coordinationGroups) {
+				(void)groupId;
+				BotCoordination::invalidate(group.reservations, memberId);
+			}
 			it = sessions.erase(it);
 		} else {
 			success = false;
 			++it;
 		}
+	}
+	if (sessions.empty()) {
+		clearCoordination();
 	}
 	return success;
 }
@@ -203,3 +228,135 @@ BotQuestObservation BotManager::observeQuest(const std::string&name,const BotQue
 BotQuestEligibility BotManager::evaluateQuest(const std::string&name,BotMissionId id,const BotQuestDefinition&d,const BotNpcDialoguePolicy&p,const BotQuestBounds&b){const auto s=sessions.find(asLowerCaseString(name));return s==sessions.end()?BotQuestEligibility{.result=BotQuestFailure::InvalidLifecycle}:s->second->evaluateQuest(id,d,p,b);}
 BotQuestExecutionResult BotManager::startQuestExecution(const std::string&name,const BotQuestPlan&p,const BotQuestExecutionPolicy&policy){const auto s=sessions.find(asLowerCaseString(name));return s==sessions.end()?BotQuestExecutionResult{.state=BotQuestExecutionState::Failed,.failure=BotQuestExecutionFailure::InvalidLifecycle}:s->second->startQuestExecution(p,policy);}
 BotQuestExecutionResult BotManager::advanceQuestExecution(const std::string&name,const BotQuestPlan&p,const BotQuestStepObservation&o,const BotQuestExecutionPolicy&policy){const auto s=sessions.find(asLowerCaseString(name));return s==sessions.end()?BotQuestExecutionResult{.state=BotQuestExecutionState::Failed,.failure=BotQuestExecutionFailure::InvalidLifecycle}:s->second->advanceQuestExecution(p,o,policy);}
+
+BotCoordinationFailure BotManager::configureCoordinationGroup(BotCoordinationPolicy policy) {
+	if (const auto failure = BotCoordination::validate(policy); failure != BotCoordinationFailure::None) {
+		return failure;
+	}
+	if (!coordinationGroups.contains(policy.id) && coordinationGroups.size() >= policy.maximumGroups) {
+		return BotCoordinationFailure::BudgetReached;
+	}
+	std::ranges::sort(policy.configuredMembers);
+	std::ranges::sort(policy.configuredRoles);
+	coordinationGroups.insert_or_assign(policy.id, BotCoordinationGroupState { .policy = std::move(policy) });
+	return BotCoordinationFailure::None;
+}
+
+BotCoordinationGroupObservation BotManager::observeCoordinationGroup(BotCoordinationGroupId groupId) {
+	const auto group = coordinationGroups.find(groupId);
+	if (group == coordinationGroups.end()) {
+		return {};
+	}
+	auto &state = group->second;
+	if (state.observationRevision != std::numeric_limits<uint64_t>::max()) {
+		++state.observationRevision;
+	}
+	BotCoordinationGroupObservation observation { .id = groupId, .revision = state.observationRevision };
+	std::shared_ptr<Party> leaderParty;
+	for (const auto &[name, session] : sessions) {
+		(void)name;
+		if (!session->player || session->player->getGUID() != state.policy.configuredLeader) {
+			continue;
+		}
+		leaderParty = session->player->getParty();
+		break;
+	}
+	for (const auto memberId : state.policy.configuredMembers) {
+		for (const auto &[name, session] : sessions) {
+			(void)name;
+			if (!session->player || session->player->getGUID() != memberId) {
+				continue;
+			}
+			const auto &player = session->player;
+			const auto maximumHealth = std::max<int32_t>(1, player->getMaxHealth());
+			observation.members.push_back({
+				.id = memberId,
+				.sessionGeneration = sessionGenerations[memberId],
+				.revision = observation.revision,
+				.vocationId = player->getVocationId(),
+				.position = player->getPosition(),
+				.healthPercent = static_cast<uint8_t>(std::clamp<int32_t>(player->getHealth() * 100 / maximumHealth, 0, 100)),
+				.configured = true,
+				.partyMember = leaderParty && player->getParty() == leaderParty,
+				.playerBot = true,
+				.alive = player->getHealth() > 0,
+				.placed = session->state == BotSessionState::Placed && !player->isRemoved(),
+				.visible = true,
+			});
+			break;
+		}
+		if (observation.members.size() >= state.policy.maximumMemberObservations) {
+			break;
+		}
+	}
+	return observation;
+}
+
+BotCoordinationDecision BotManager::evaluateCoordinationGroup(BotCoordinationGroupId groupId) {
+	const auto group = coordinationGroups.find(groupId);
+	if (group == coordinationGroups.end()) {
+		return { .state = BotCoordinationState::Failed, .failure = BotCoordinationFailure::InvalidGroup };
+	}
+	auto &state = group->second;
+	const auto previousLeader = state.leaderId;
+	const auto observation = observeCoordinationGroup(groupId);
+	std::erase_if(state.reservations, [&](const auto &reservation) {
+		const auto member = std::ranges::find(observation.members, reservation.memberId, &BotCoordinationMemberObservation::id);
+		return member == observation.members.end() || !member->alive || !member->placed || member->sessionGeneration != reservation.sessionGeneration;
+	});
+	auto decision = BotCoordination::evaluate(state.policy, observation, previousLeader, state.leaderChanges, state.regroupAttempts);
+	if (decision.leaderId != 0 && previousLeader != 0 && decision.leaderId != previousLeader) {
+		++state.leaderChanges;
+		++state.regroupAttempts;
+		BotCoordination::invalidate(state.reservations, previousLeader);
+	}
+	state.leaderId = decision.leaderId;
+	return decision;
+}
+
+BotCoordinationFailure BotManager::reserveCoordinationTarget(BotCoordinationReservation reservation, uint64_t now) {
+	const auto group = coordinationGroups.find(reservation.groupId);
+	if (group == coordinationGroups.end()) {
+		return BotCoordinationFailure::InvalidGroup;
+	}
+	const auto generation = sessionGenerations.find(reservation.memberId);
+	if (generation == sessionGenerations.end() || generation->second != reservation.sessionGeneration) {
+		return BotCoordinationFailure::GenerationMismatch;
+	}
+	if (reservation.observationRevision != group->second.observationRevision) {
+		return BotCoordinationFailure::StaleObservation;
+	}
+	return BotCoordination::reserve(group->second.reservations, reservation, group->second.policy, now);
+}
+
+void BotManager::invalidateCoordinationTarget(BotCoordinationGroupId groupId, BotCoordinationReservationType type, uint64_t targetSignature) {
+	if (const auto group = coordinationGroups.find(groupId); group != coordinationGroups.end()) {
+		BotCoordination::invalidateTarget(group->second.reservations, type, targetSignature);
+	}
+}
+
+BotRouteProgress BotManager::executeCoordinationMovement(const std::string &name, const BotCoordinationIntent &intent, std::chrono::milliseconds now, BotRouteLimits limits) {
+	const auto session = sessions.find(asLowerCaseString(name));
+	if (session == sessions.end() || !session->second->player || session->second->player->getGUID() != intent.memberId) {
+		return { .state = BotRouteState::Failed, .reason = BotRouteReason::InvalidLifecycle };
+	}
+	const auto group = coordinationGroups.find(intent.groupId);
+	if (group == coordinationGroups.end() || intent.policyRevision != group->second.policy.revision || intent.observationRevision != group->second.observationRevision || !std::ranges::contains(group->second.policy.configuredMembers, intent.memberId)) {
+		return { .state = BotRouteState::Failed, .reason = BotRouteReason::StaleTopology };
+	}
+	auto destination = intent.region;
+	if (intent.type == BotCoordinationIntentType::Formation) {
+		destination.x = static_cast<uint16_t>(std::clamp<int32_t>(static_cast<int32_t>(destination.x) + intent.offsetX, 0, std::numeric_limits<uint16_t>::max()));
+		destination.y = static_cast<uint16_t>(std::clamp<int32_t>(static_cast<int32_t>(destination.y) + intent.offsetY, 0, std::numeric_limits<uint16_t>::max()));
+	}
+	return session->second->startRoute(destination, now, limits);
+}
+
+size_t BotManager::coordinationReservationCount(BotCoordinationGroupId groupId) const {
+	const auto group = coordinationGroups.find(groupId);
+	return group == coordinationGroups.end() ? 0 : group->second.reservations.size();
+}
+
+void BotManager::clearCoordination() {
+	coordinationGroups.clear();
+}
