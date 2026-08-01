@@ -411,7 +411,7 @@ Skapa ett generellt, serverauktoritativt questflöde.
 
 ### Objective-typer
 
-- [ ] prata med NPC
+- [x] prata med NPC
 - [ ] besök plats
 - [ ] döda creatures
 - [ ] samla items
@@ -427,12 +427,25 @@ Skapa ett generellt, serverauktoritativt questflöde.
 - [ ] `QuestDefinition`
 - [ ] `QuestProgress`
 - [ ] `BotQuestPlan`
-- [ ] structured NPC adapter där möjligt
+- [x] structured NPC adapter där möjligt
 - [ ] metadata/adapters för Lua-baserade quests
 - [ ] storage används som serverauktoritativ signal
 - [ ] botten skriver aldrig quest-storage direkt
 - [ ] retry och idempotens
 - [ ] restart/resume
+
+M7A-evidens: en bounded, value-only NPC-dialogueadapter väljer endast explicit
+konfigurerade synliga NPC:er, använder M2 för approach och skickar endast
+konfigurerade greeting/topic/yes/no/farewell-fraser genom Canarys ordinarie
+player-speech-väg. NPC-svar observeras vid samma `Player::sendCreatureSay`-gräns
+som nätverksklienten och sparas som en 16-posters bounded värdebuffer; ingen NPC-
+eller Lua-ägarskap och ingen dold keyword/storage-state behålls. Framgång kräver
+ett faktiskt levererat svar med förväntad bounded token. Registrerad Lua-NPC-
+fixture bevisar approach, hearing, focus, greeting, topic, confirmation, farewell,
+timeout, range/removal-cancellation, rate bounds, M6B shop-regression och oförändrad
+quest storage. Komplett gate: build 0, unit 367/367, databasbackad integration
+79/79, diff 0. Source commit `442096a47`. Full M7 förblir öppen för quest-state,
+prerequisites, storage/reward verification, multi-NPC-flöden och travel execution.
 
 ### Acceptance
 
