@@ -231,12 +231,12 @@ Hantera corpse, loot, nästlade containers, capacity och grundläggande supplies
 
 ### Leverabler
 
-- [ ] corpse detection
-- [ ] corpse ownership/access
+- [x] corpse detection
+- [x] corpse ownership/access
 - [ ] open container
 - [ ] nested `containerPath`
-- [ ] item-ID-baserade lootregler
-- [ ] stack count
+- [x] item-ID-baserade lootregler
+- [x] stack count
 - [ ] destination backpack
 - [ ] capacity
 - [ ] full container
@@ -244,6 +244,12 @@ Hantera corpse, loot, nästlade containers, capacity och grundläggande supplies
 - [ ] okända items bevaras
 - [ ] supply counters
 - [ ] jakt avbryts vid tröskel
+
+M4A-evidens: value-only corpse-signaturer observerar verklig monsterdöd, decay,
+synlighet, M2-nåbarhet, loot-rights, top-level containerinnehåll, stack counts och
+deterministiska item-ID-regler utan att öppna corpset eller flytta items. M4B
+återstår för authoritative open/transfer, destination containers och full/capacity
+handling; M4C återstår för supply counters och depletion decisions.
 
 ### Acceptance
 
