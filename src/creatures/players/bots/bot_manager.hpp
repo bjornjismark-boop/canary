@@ -7,6 +7,7 @@
 #pragma once
 
 #include "creatures/players/bots/bot_coordination.hpp"
+#include "creatures/players/bots/bot_fleet.hpp"
 #include "creatures/players/bots/bot_session.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
@@ -79,6 +80,15 @@ public:
 	[[nodiscard]] size_t coordinationGroupCount() const { return coordinationGroups.size(); }
 	[[nodiscard]] size_t coordinationReservationCount(BotCoordinationGroupId) const;
 	void clearCoordination();
+	[[nodiscard]] BotFleetFailure configureFleet(BotFleetPopulationPolicy, BotFleetDistributionPolicy, std::vector<BotFleetMemberProfile>, uint32_t intervalTicks = 1000);
+	[[nodiscard]] BotFleetReconciliation reconcileFleet(uint64_t now, bool overloaded = false);
+	[[nodiscard]] bool startFleet(uint64_t now = 0);
+	void pauseFleet();
+	void resumeFleet();
+	void drainFleet(uint32_t target = 0);
+	void stopFleet(bool savePlayers = true);
+	[[nodiscard]] const BotFleetControllerStateValue &fleetState() const { return fleetController; }
+	[[nodiscard]] const BotFleetReconciliation &lastFleetReconciliation() const { return lastFleetResult; }
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();
@@ -90,4 +100,16 @@ private:
 	std::unordered_map<std::string, std::shared_ptr<BotSession>> sessions;
 	std::unordered_map<BotCoordinationGroupId, BotCoordinationGroupState> coordinationGroups;
 	std::unordered_map<BotCoordinationMemberId, uint64_t> sessionGenerations;
+	BotFleetPopulationPolicy fleetPopulation;
+	BotFleetDistributionPolicy fleetDistribution;
+	std::vector<BotFleetMemberProfile> fleetMembers;
+	std::unordered_map<BotFleetMemberId, BotFleetObservation> fleetLifecycle;
+	BotFleetControllerStateValue fleetController;
+	BotFleetReconciliation lastFleetResult;
+	std::shared_ptr<uint64_t> fleetLifetime = std::make_shared<uint64_t>(1);
+	uint64_t fleetEventId = 0;
+	uint64_t fleetObservationRevision = 0;
+	uint32_t fleetIntervalTicks = 1000;
+	void scheduleFleetReconciliation();
+	void executeFleetReconciliation();
 };

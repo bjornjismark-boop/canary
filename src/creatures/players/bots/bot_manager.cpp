@@ -10,6 +10,7 @@
 #include "creatures/players/grouping/party.hpp"
 #include "creatures/players/player.hpp"
 #include "game/game.hpp"
+#include "game/scheduling/dispatcher.hpp"
 #include "lib/logging/log_with_spd_log.hpp"
 #include "utils/tools.hpp"
 
@@ -19,6 +20,12 @@ BotManager::BotManager(Game &game, BotSessionOperations operations) :
 
 BotManager::~BotManager() noexcept {
 	try {
+		fleetController.stopping = true;
+		if (fleetEventId != 0) g_dispatcher().stopEvent(fleetEventId);
+		fleetEventId = 0;
+		fleetController.wakeupPending = false;
+		fleetLifetime.reset();
+		fleetLifecycle.clear();
 		clearCoordination();
 		bool success = true;
 		for (const auto &[name, session] : sessions) {
@@ -359,4 +366,124 @@ size_t BotManager::coordinationReservationCount(BotCoordinationGroupId groupId) 
 
 void BotManager::clearCoordination() {
 	coordinationGroups.clear();
+}
+
+BotFleetFailure BotManager::configureFleet(BotFleetPopulationPolicy population, BotFleetDistributionPolicy distribution, std::vector<BotFleetMemberProfile> members, uint32_t intervalTicks) {
+	if (const auto failure = BotFleet::validate(population); failure != BotFleetFailure::None) return failure;
+	if (const auto failure = BotFleet::validate(distribution, members); failure != BotFleetFailure::None) return failure;
+	if (intervalTicks == 0 || intervalTicks > BotFleet::AbsoluteMaximumBackoffTicks) return BotFleetFailure::InvalidPolicy;
+	if (fleetEventId != 0) g_dispatcher().stopEvent(fleetEventId);
+	fleetEventId = 0;
+	fleetPopulation = population;
+	fleetDistribution = std::move(distribution);
+	fleetMembers = std::move(members);
+	fleetIntervalTicks = intervalTicks;
+	fleetLifecycle.clear();
+	BotFleet::clear(fleetController);
+	fleetController.stopping = false;
+	if (!fleetLifetime) fleetLifetime = std::make_shared<uint64_t>(fleetController.generation);
+	fleetController.startedAtTick = g_dispatcher().getDispatcherCycle();
+	return BotFleetFailure::None;
+}
+
+BotFleetReconciliation BotManager::reconcileFleet(uint64_t now, bool overloaded) {
+	std::vector<BotFleetObservation> observations;
+	observations.reserve(fleetMembers.size());
+	if (fleetObservationRevision != std::numeric_limits<uint64_t>::max()) ++fleetObservationRevision;
+	for (const auto &member : fleetMembers) {
+		auto observation = fleetLifecycle.contains(member.id) ? fleetLifecycle.at(member.id) : BotFleetObservation { .id = member.id };
+		observation.observationRevision = fleetObservationRevision;
+		const auto session = getSession(member.name);
+		const auto worldPlayer = game.getPlayerByName(member.name);
+		observation.ordinaryHuman = worldPlayer && worldPlayer->isNetworkControlled();
+		observation.duplicateSession = session && (!session->getPlayer() || session->getPlayer()->getGUID() != member.id);
+		if (session && session->getState() == BotSessionState::Placed && session->getPlayer() && session->getPlayer()->getGUID() == member.id) {
+			observation.state = BotFleetMemberState::Placed;
+			if (observation.placedAtTick == 0) observation.placedAtTick = now;
+		} else if (!session && !observation.ordinaryHuman
+		           && observation.state != BotFleetMemberState::LoginQueued && observation.state != BotFleetMemberState::Loading && observation.state != BotFleetMemberState::PlacementPending && observation.state != BotFleetMemberState::Recovering
+		           && observation.state != BotFleetMemberState::DrainRequested && observation.state != BotFleetMemberState::Saving && observation.state != BotFleetMemberState::LogoutPending) {
+			observation.state = BotFleetMemberState::Offline;
+			observation.placedAtTick = 0;
+		}
+		observations.push_back(observation);
+	}
+	lastFleetResult = BotFleet::reconcile(fleetController, fleetPopulation, fleetDistribution, fleetMembers, observations, now, overloaded);
+	for (const auto &request : lastFleetResult.requests) {
+		const auto member = std::ranges::find(fleetMembers, request.memberId, &BotFleetMemberProfile::id);
+		if (member == fleetMembers.end()) continue;
+		auto &lifecycle = fleetLifecycle[member->id];
+		lifecycle.id = member->id;
+		if (request.type == BotFleetLifecycleRequestType::Login) {
+			lifecycle.state = BotFleetMemberState::LoginQueued;
+			if (const auto session = login(member->name); session && session->getState() == BotSessionState::Placed) {
+				lifecycle.state = BotFleetMemberState::Placed;
+				lifecycle.placedAtTick = now;
+				lifecycle.regionIntent = request.regionIntent;
+				lifecycle.loginFailures = 0;
+			} else {
+				lifecycle.state = BotFleetMemberState::Backoff;
+				if (lifecycle.loginFailures != std::numeric_limits<uint16_t>::max()) ++lifecycle.loginFailures;
+				lifecycle.nextEligibleTick = BotFleet::retryAt(now, lifecycle.loginFailures, fleetPopulation.maximumRetryBackoffTicks);
+			}
+		} else {
+			lifecycle.state = BotFleetMemberState::DrainRequested;
+			if (logout(member->name, true)) {
+				lifecycle = { .id = member->id, .state = BotFleetMemberState::Offline, .observationRevision = fleetObservationRevision };
+			} else {
+				lifecycle.state = BotFleetMemberState::Backoff;
+				if (lifecycle.logoutFailures != std::numeric_limits<uint16_t>::max()) ++lifecycle.logoutFailures;
+				lifecycle.nextEligibleTick = BotFleet::retryAt(now, lifecycle.logoutFailures, fleetPopulation.maximumRetryBackoffTicks);
+			}
+		}
+	}
+	if (fleetController.draining && sessions.empty()) {
+		clearCoordination();
+	}
+	return lastFleetResult;
+}
+
+bool BotManager::startFleet(uint64_t now) {
+	if (!fleetPopulation.enabled || fleetController.stopping || fleetEventId != 0) return false;
+	fleetController.startedAtTick = now;
+	fleetController.freshObservationRequired = true;
+	scheduleFleetReconciliation();
+	return fleetEventId != 0;
+}
+
+void BotManager::scheduleFleetReconciliation() {
+	if (fleetController.stopping || fleetController.wakeupPending || !fleetPopulation.enabled) return;
+	const std::weak_ptr<uint64_t> lifetime = fleetLifetime;
+	const auto generation = fleetController.generation;
+	fleetController.wakeupPending = true;
+	fleetEventId = g_dispatcher().scheduleEvent(fleetIntervalTicks, [this, lifetime, generation] {
+		if (lifetime.expired() || fleetController.stopping || fleetController.generation != generation) return;
+		fleetController.wakeupPending = false;
+		fleetEventId = 0;
+		executeFleetReconciliation();
+	}, "BotManager::reconcileFleet", DispatcherLane::Maintenance);
+	if (fleetEventId == 0) fleetController.wakeupPending = false;
+}
+
+void BotManager::executeFleetReconciliation() {
+	const auto overloaded = g_dispatcher().getLoadState() != DispatcherLoadState::Normal || game.getGameState() == GAME_STATE_SHUTDOWN;
+	(void)reconcileFleet(g_dispatcher().getDispatcherCycle(), overloaded);
+	scheduleFleetReconciliation();
+}
+
+void BotManager::pauseFleet() { BotFleet::pause(fleetController); }
+void BotManager::resumeFleet() { BotFleet::resume(fleetController); scheduleFleetReconciliation(); }
+void BotManager::drainFleet(uint32_t target) { BotFleet::drain(fleetController, target); scheduleFleetReconciliation(); }
+
+void BotManager::stopFleet(bool savePlayers) {
+	fleetController.stopping = true;
+	if (fleetEventId != 0) g_dispatcher().stopEvent(fleetEventId);
+	fleetEventId = 0;
+	fleetController.wakeupPending = false;
+	fleetLifetime.reset();
+	clearCoordination();
+	(void)clear(savePlayers);
+	fleetLifecycle.clear();
+	BotFleet::clear(fleetController);
+	fleetController.stopping = true;
 }

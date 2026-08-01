@@ -15,6 +15,7 @@
 #include "creatures/players/bots/bot_planner_persistence.hpp"
 #include "creatures/players/bots/bot_progression.hpp"
 #include "creatures/players/bots/bot_coordination.hpp"
+#include "creatures/players/bots/bot_fleet.hpp"
 #include "creatures/players/grouping/party.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
@@ -253,6 +254,61 @@ TEST(PlayerBotIntegrationTest, ProgressionObservesAuthoritativeSkillAndMigratesP
 	const auto skillBefore=player->getSkillLevel(SKILL_SWORD);player->addSkillAdvance(SKILL_SWORD,player->getVocation()->getReqSkillTries(SKILL_SWORD,skillBefore+1));const auto observed=BotProgression::observe(player,1,WEAPON_SWORD);EXPECT_GT(player->getSkillLevel(SKILL_SWORD),skillBefore);BotProgressionTarget target{.level={player->getLevel()},.skills={{.type=BotSkillType::Sword,.level=player->getSkillLevel(SKILL_SWORD),.requiredVocationId=player->getVocationId(),.requiredWeaponType=WEAPON_SWORD}},.policyRevision=1};EXPECT_TRUE(BotProgression::assess(target,observed).terminal);
 	BotPersistedPlanCheckpoint old{.playerId=fixture.playerId,.schemaVersion=1,.checkpointRevision=1,.policyRevision=1,.goalId=1,.goalType=BotGoalType::GainConfiguredProgress,.planRevision=1,.safeSaveBoundary=true};old.checksum=BotPlannerPersistence::checksum(old);
 	std::ostringstream q;q<<"INSERT INTO `player_bot_planner_state` (`player_id`,`schema_version`,`checkpoint_revision`,`policy_revision`,`goal_id`,`goal_type`,`plan_revision`,`verified_step_index`,`verified_subsystem`,`failure_count`,`retry_count`,`configured_target_id`,`region_x`,`region_y`,`region_z`,`safe_boundary`,`checksum`) VALUES ("<<old.playerId<<",1,1,1,1,"<<static_cast<uint16_t>(old.goalType)<<",1,0,0,0,0,0,0,0,0,1,"<<old.checksum<<")";ASSERT_TRUE(g_database().executeQuery(q.str()));auto loaded=BotPlannerPersistence::load(fixture.playerId);ASSERT_EQ(BotCheckpointLoadReason::Valid,loaded.reason);ASSERT_TRUE(loaded.checkpoint);EXPECT_EQ(2,loaded.checkpoint->schemaVersion);EXPECT_TRUE(loaded.freshObservationRequired);EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_TRUE(BotPlannerPersistence::erase(fixture.playerId));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, FleetReconciliationUsesOrdinaryManagedLifecycleGradually) {
+	PlayerBotDatabaseFixture first(g_database());
+	PlayerBotDatabaseFixture second(g_database());
+	createWalkableTile(first.start);
+	createWalkableTile(second.start);
+	BotManager manager(g_game());
+	BotFleetPopulationPolicy policy { .desiredOnline=2, .minimumOnline=0, .maximumOnline=2, .absoluteHardMaximum=2, .maximumLoginsPerInterval=1, .maximumLogoutsPerInterval=1, .maximumPendingLogins=1, .maximumPendingLogouts=1, .maximumRetries=3, .revision=1 };
+	BotFleetDistributionPolicy distribution;
+	std::vector<BotFleetMemberProfile> members { { .id=first.playerId, .name=first.name, .allowedRegionIds={17}, .priority=1 }, { .id=second.playerId, .name=second.name, .priority=2 } };
+	BotFleetControllerStateValue controller;
+	auto reconciliation = BotFleet::reconcile(controller, policy, distribution, members, {}, 0);
+	ASSERT_EQ(1, reconciliation.requests.size());
+	EXPECT_EQ(first.playerId, reconciliation.requests.front().memberId);
+	auto firstSession = loginBotOrReport(manager, first.name);
+	ASSERT_NE(nullptr, firstSession);
+	ASSERT_EQ(BotSessionState::Placed, firstSession->getState());
+	std::vector<BotFleetObservation> observations { { .id=first.playerId, .state=BotFleetMemberState::Placed, .observationRevision=1 } };
+	reconciliation = BotFleet::reconcile(controller, policy, distribution, members, observations, 1);
+	ASSERT_EQ(1, reconciliation.requests.size());
+	EXPECT_EQ(second.playerId, reconciliation.requests.front().memberId);
+	auto secondSession = loginBotOrReport(manager, second.name);
+	ASSERT_NE(nullptr, secondSession);
+	EXPECT_EQ(2, manager.size());
+	EXPECT_EQ(nullptr, manager.login(first.name));
+	BotFleet::pause(controller);
+	EXPECT_TRUE(BotFleet::reconcile(controller, policy, distribution, members, observations, 2).requests.empty());
+	BotFleet::drain(controller);
+	observations.push_back({ .id=second.playerId, .state=BotFleetMemberState::Placed, .observationRevision=2 });
+	reconciliation = BotFleet::reconcile(controller, policy, distribution, members, observations, 3);
+	ASSERT_EQ(1, reconciliation.requests.size());
+	EXPECT_EQ(BotFleetLifecycleRequestType::Logout, reconciliation.requests.front().type);
+	EXPECT_TRUE(manager.logout(second.name, true));
+	EXPECT_TRUE(manager.logout(first.name, true));
+	EXPECT_EQ(0, manager.size());
+	ASSERT_TRUE(second.cleanup());
+	ASSERT_TRUE(first.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, FleetManagerOwnsAuthoritativeLoginDrainAndCoordinationCleanup) {
+	PlayerBotDatabaseFixture first(g_database()); PlayerBotDatabaseFixture second(g_database()); createWalkableTile(first.start); createWalkableTile(second.start);
+	BotManager manager(g_game()); BotFleetPopulationPolicy policy{.desiredOnline=2,.minimumOnline=0,.maximumOnline=2,.absoluteHardMaximum=2,.maximumLoginsPerInterval=1,.maximumLogoutsPerInterval=1,.maximumPendingLogins=1,.maximumPendingLogouts=1,.maximumRetries=3,.revision=1};
+	std::vector<BotFleetMemberProfile> members{{.id=first.playerId,.name=first.name,.vocationCategory=1,.coordinationGroupId=44,.allowedRegionIds={7},.priority=1},{.id=second.playerId,.name=second.name,.vocationCategory=2,.coordinationGroupId=44,.allowedRegionIds={8},.priority=2}};
+	BotFleetDistributionPolicy distribution;distribution.limits={{BotFleetDistributionDimension::Vocation,1,1,1,1},{BotFleetDistributionDimension::Vocation,2,1,1,1},{BotFleetDistributionDimension::Region,7,0,1,1},{BotFleetDistributionDimension::Region,8,0,1,1}};
+	ASSERT_EQ(BotFleetFailure::None,manager.configureFleet(policy,distribution,members,10));auto firstTick=manager.reconcileFleet(1);ASSERT_EQ(1,firstTick.requests.size());EXPECT_EQ(first.playerId,firstTick.requests.front().memberId);EXPECT_EQ(1,manager.size());EXPECT_EQ(BotSessionState::Placed,manager.getSession(first.name)->getState());
+	auto secondTick=manager.reconcileFleet(2);ASSERT_EQ(1,secondTick.requests.size());EXPECT_EQ(second.playerId,secondTick.requests.front().memberId);EXPECT_EQ(2,manager.size());EXPECT_EQ(nullptr,manager.login(first.name));
+	BotCoordinationPolicy coordination{.id=44,.configuredMembers={first.playerId,second.playerId},.revision=1};ASSERT_EQ(BotCoordinationFailure::None,manager.configureCoordinationGroup(coordination));manager.pauseFleet();EXPECT_TRUE(manager.reconcileFleet(3).requests.empty());manager.resumeFleet();EXPECT_TRUE(manager.fleetState().freshObservationRequired);
+	manager.drainFleet();auto drainOne=manager.reconcileFleet(4);ASSERT_EQ(1,drainOne.requests.size());EXPECT_EQ(BotFleetLifecycleRequestType::Logout,drainOne.requests.front().type);EXPECT_EQ(1,manager.size());auto drainTwo=manager.reconcileFleet(5);ASSERT_EQ(1,drainTwo.requests.size());EXPECT_EQ(0,manager.size());EXPECT_EQ(0,manager.coordinationGroupCount());
+	manager.stopFleet(true);EXPECT_TRUE(manager.fleetState().stopping);EXPECT_FALSE(manager.fleetState().wakeupPending);ASSERT_TRUE(second.cleanup());ASSERT_TRUE(first.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, FleetFailedSaveDoesNotReportSafeLogoutCompletion) {
+	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);size_t saveAttempts=0;BotSessionOperations operations;operations.save=[&](const std::shared_ptr<Player>&){return ++saveAttempts>1;};BotManager manager(g_game(),std::move(operations));
+	BotFleetPopulationPolicy policy{.desiredOnline=1,.minimumOnline=0,.maximumOnline=1,.absoluteHardMaximum=1,.maximumLoginsPerInterval=1,.maximumLogoutsPerInterval=1,.maximumPendingLogins=1,.maximumPendingLogouts=1,.maximumRetries=2,.revision=1};std::vector<BotFleetMemberProfile>members{{.id=fixture.playerId,.name=fixture.name}};ASSERT_EQ(BotFleetFailure::None,manager.configureFleet(policy,{},members,10));ASSERT_EQ(1,manager.reconcileFleet(1).requests.size());ASSERT_EQ(1,manager.size());manager.drainFleet();auto result=manager.reconcileFleet(2);ASSERT_EQ(1,result.requests.size());EXPECT_EQ(1U,saveAttempts);EXPECT_EQ(1,manager.size());EXPECT_EQ(BotSessionState::PendingSave,manager.getSession(fixture.name)->getState());manager.stopFleet(false);ASSERT_TRUE(fixture.cleanup());
 }
 
 TEST(PlayerBotIntegrationTest, MultiBotCoordinationObservesPartyAndDelegatesFormationToM2) {

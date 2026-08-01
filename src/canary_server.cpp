@@ -37,6 +37,7 @@
 #include "server/network/protocol/protocolstatus.hpp"
 #include "server/network/webhook/webhook.hpp"
 #include "creatures/players/components/weapon_proficiency.hpp"
+#include "creatures/players/bots/bot_manager.hpp"
 #include "creatures/players/vocations/vocation.hpp"
 #include "utils/benchmark.hpp"
 
@@ -130,6 +131,8 @@ CanaryServer::CanaryServer(
 	SetConsoleTitleA(ProtocolStatus::SERVER_NAME.c_str());
 #endif
 }
+
+CanaryServer::~CanaryServer() = default;
 
 bool CanaryServer::generateLuaApiDocs(const bool force) const {
 	if (!force && !g_configManager().getBoolean(GENERATE_LUA_API_DOCS)) {
@@ -236,6 +239,9 @@ int CanaryServer::run() {
 #endif
 
 				g_game().start(&serviceManager);
+				// The server owns the PlayerBot lifecycle boundary. Fleet policy is
+				// disabled until a validated configuration revision is installed.
+				botManager = std::make_unique<BotManager>(g_game());
 				if (g_configManager().getBoolean(TOGGLE_MAINTAIN_MODE)) {
 					g_game().setGameState(GAME_STATE_CLOSED);
 					g_logger().warn("Initialized in maintain mode!");
@@ -407,7 +413,10 @@ void CanaryServer::badAllocationHandler() {
 		getchar();
 	}
 
-	shutdown();
+	g_monsterComputeService().shutdown();
+	g_dispatcher().shutdown();
+	g_metrics().shutdown();
+	g_threadPool().shutdown();
 	exit(-1);
 }
 
@@ -619,6 +628,10 @@ void CanaryServer::modulesLoadHelper(bool loaded, std::string_view identifier) {
 }
 
 void CanaryServer::shutdown() {
+	if (botManager) {
+		botManager->stopFleet(true);
+		botManager.reset();
+	}
 	g_monsterComputeService().shutdown();
 	g_database().createDatabaseBackup(true);
 	g_dispatcher().shutdown();

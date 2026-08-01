@@ -172,6 +172,9 @@ public:
 	[[nodiscard]] uint64_t getDispatcherCycle() const {
 		return dispatcherCycle;
 	}
+	[[nodiscard]] DispatcherLoadState getLoadState() const noexcept {
+		return adaptiveBudgetController.getState();
+	}
 
 	void stopEvent(uint64_t eventId);
 

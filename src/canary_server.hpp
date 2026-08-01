@@ -13,6 +13,7 @@
 #include "server/server.hpp"
 
 class Logger;
+class BotManager;
 
 class FailedToInitializeCanary : public std::exception {
 private:
@@ -36,6 +37,7 @@ public:
 		RSAManager &rsa,
 		ServiceManager &serviceManager
 	);
+	~CanaryServer();
 
 	int run();
 	int generateLuaApiDocsOnly();
@@ -50,6 +52,7 @@ private:
 	Logger &logger;
 	RSAManager &rsa;
 	ServiceManager &serviceManager;
+	std::unique_ptr<BotManager> botManager;
 
 	LoaderStatus loaderStatus = LoaderStatus::LOADING;
 	std::mutex loaderMutex;
@@ -58,7 +61,7 @@ private:
 	void logInfos();
 	static void toggleForceCloseButton();
 	static void badAllocationHandler();
-	static void shutdown();
+	void shutdown();
 
 	static std::string getCompiler();
 	static std::string getPlatform();
