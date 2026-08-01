@@ -38,6 +38,7 @@
 #include "server/network/webhook/webhook.hpp"
 #include "creatures/players/components/weapon_proficiency.hpp"
 #include "creatures/players/bots/bot_manager.hpp"
+#include "creatures/players/bots/bot_fleet_configuration.hpp"
 #include "creatures/players/vocations/vocation.hpp"
 #include "utils/benchmark.hpp"
 
@@ -242,6 +243,17 @@ int CanaryServer::run() {
 				// The server owns the PlayerBot lifecycle boundary. Fleet policy is
 				// disabled until a validated configuration revision is installed.
 				botManager = std::make_unique<BotManager>(g_game());
+				const std::string fleetConfigurationPath = "config/playerbots.json";
+				botAdministration = std::make_unique<BotFleetAdministration>([fleetConfigurationPath] { return BotFleetConfiguration::load(fleetConfigurationPath); });
+				if (std::filesystem::exists(fleetConfigurationPath)) {
+					const auto fleetConfiguration = BotFleetConfiguration::load(fleetConfigurationPath);
+					if (!fleetConfiguration.success() || botAdministration->install(*botManager, fleetConfiguration.revision) != BotFleetConfigurationFailure::None) {
+						throw FailedToInitializeCanary("PlayerBot fleet configuration is invalid");
+					}
+					if (fleetConfiguration.revision->population.enabled && !botManager->startFleet(g_dispatcher().getDispatcherCycle())) {
+						throw FailedToInitializeCanary("PlayerBot fleet reconciliation could not be scheduled");
+					}
+				}
 				if (g_configManager().getBoolean(TOGGLE_MAINTAIN_MODE)) {
 					g_game().setGameState(GAME_STATE_CLOSED);
 					g_logger().warn("Initialized in maintain mode!");
@@ -629,6 +641,8 @@ void CanaryServer::modulesLoadHelper(bool loaded, std::string_view identifier) {
 
 void CanaryServer::shutdown() {
 	if (botManager) {
+		if (botAdministration) botAdministration->stop();
+		botAdministration.reset();
 		botManager->stopFleet(true);
 		botManager.reset();
 	}

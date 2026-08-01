@@ -87,6 +87,8 @@ public:
 	void resumeFleet();
 	void drainFleet(uint32_t target = 0);
 	void stopFleet(bool savePlayers = true);
+	[[nodiscard]] bool loginFleetMember(const std::string &name);
+	[[nodiscard]] bool logoutFleetMember(const std::string &name);
 	[[nodiscard]] const BotFleetControllerStateValue &fleetState() const { return fleetController; }
 	[[nodiscard]] const BotFleetReconciliation &lastFleetReconciliation() const { return lastFleetResult; }
 

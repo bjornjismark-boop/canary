@@ -487,3 +487,13 @@ void BotManager::stopFleet(bool savePlayers) {
 	BotFleet::clear(fleetController);
 	fleetController.stopping = true;
 }
+
+bool BotManager::loginFleetMember(const std::string &name) {
+	const auto member = std::ranges::find_if(fleetMembers, [&](const auto &entry) { return asLowerCaseString(entry.name) == asLowerCaseString(name); });
+	return member != fleetMembers.end() && member->enabled && !member->alwaysOffline && sessions.size() < fleetPopulation.absoluteHardMaximum && login(member->name) != nullptr;
+}
+
+bool BotManager::logoutFleetMember(const std::string &name) {
+	const auto member = std::ranges::find_if(fleetMembers, [&](const auto &entry) { return asLowerCaseString(entry.name) == asLowerCaseString(name); });
+	return member != fleetMembers.end() && logout(member->name, true);
+}

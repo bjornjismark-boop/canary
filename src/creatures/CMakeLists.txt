@@ -57,6 +57,8 @@ target_sources(
 			players/bots/bot_coordination.hpp
 			players/bots/bot_fleet.cpp
 			players/bots/bot_fleet.hpp
+			players/bots/bot_fleet_configuration.cpp
+			players/bots/bot_fleet_configuration.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp

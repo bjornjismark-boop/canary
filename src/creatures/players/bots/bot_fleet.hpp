@@ -35,6 +35,7 @@ struct BotFleetMemberProfile {
 	uint32_t maximumSessionTicks = 0;
 	bool enabled = true;
 	bool alwaysOffline = false;
+	bool operator==(const BotFleetMemberProfile &) const = default;
 };
 
 struct BotFleetDistributionLimit {
@@ -79,6 +80,7 @@ struct BotFleetPopulationPolicy {
 	uint64_t revision = 1;
 	bool enabled = true;
 	bool overloadPause = true;
+	bool operator==(const BotFleetPopulationPolicy &) const = default;
 };
 
 struct BotFleetDistributionPolicy {
@@ -88,6 +90,7 @@ struct BotFleetDistributionPolicy {
 	uint16_t maximumPerRegion = 64;
 	std::vector<BotFleetDistributionLimit> limits;
 	uint64_t revision = 1;
+	bool operator==(const BotFleetDistributionPolicy &) const = default;
 };
 
 struct BotFleetBudget {

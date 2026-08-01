@@ -16,6 +16,7 @@
 #include "creatures/players/bots/bot_progression.hpp"
 #include "creatures/players/bots/bot_coordination.hpp"
 #include "creatures/players/bots/bot_fleet.hpp"
+#include "creatures/players/bots/bot_fleet_configuration.hpp"
 #include "creatures/players/grouping/party.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
@@ -309,6 +310,15 @@ TEST(PlayerBotIntegrationTest, FleetManagerOwnsAuthoritativeLoginDrainAndCoordin
 TEST(PlayerBotIntegrationTest, FleetFailedSaveDoesNotReportSafeLogoutCompletion) {
 	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);size_t saveAttempts=0;BotSessionOperations operations;operations.save=[&](const std::shared_ptr<Player>&){return ++saveAttempts>1;};BotManager manager(g_game(),std::move(operations));
 	BotFleetPopulationPolicy policy{.desiredOnline=1,.minimumOnline=0,.maximumOnline=1,.absoluteHardMaximum=1,.maximumLoginsPerInterval=1,.maximumLogoutsPerInterval=1,.maximumPendingLogins=1,.maximumPendingLogouts=1,.maximumRetries=2,.revision=1};std::vector<BotFleetMemberProfile>members{{.id=fixture.playerId,.name=fixture.name}};ASSERT_EQ(BotFleetFailure::None,manager.configureFleet(policy,{},members,10));ASSERT_EQ(1,manager.reconcileFleet(1).requests.size());ASSERT_EQ(1,manager.size());manager.drainFleet();auto result=manager.reconcileFleet(2);ASSERT_EQ(1,result.requests.size());EXPECT_EQ(1U,saveAttempts);EXPECT_EQ(1,manager.size());EXPECT_EQ(BotSessionState::PendingSave,manager.getSession(fixture.name)->getState());manager.stopFleet(false);ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, FleetConfigurationCommandsAreAtomicAuditedAndAuthoritative) {
+	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);const auto json=fmt::format(R"({{"schemaVersion":1,"revision":1,"population":{{"enabled":true,"desiredOnline":0,"minimumOnline":0,"maximumOnline":1,"absoluteHardMaximum":1}},"members":[{{"id":{},"name":"{}"}}]}})",fixture.playerId,fixture.name);auto parsed=BotFleetConfiguration::parse(json);ASSERT_TRUE(parsed.success());
+	BotManager manager(g_game());BotFleetAdministration admin([&]{return BotFleetConfiguration::parse(fmt::format(R"({{"schemaVersion":1,"revision":3,"population":{{"enabled":true,"desiredOnline":0,"minimumOnline":0,"maximumOnline":1,"absoluteHardMaximum":1}},"members":[{{"id":{},"name":"{}"}}]}})",fixture.playerId,fixture.name));});ASSERT_EQ(BotFleetConfigurationFailure::None,admin.install(manager,parsed.revision));EXPECT_EQ(1,admin.activeRevision()->revision);
+	auto rejected=admin.submit({.type=BotFleetCommandType::Pause,.operatorId=7},false);EXPECT_EQ(BotFleetCommandFailure::Unauthorized,rejected.failure);auto accepted=admin.submit({.type=BotFleetCommandType::LoginMember,.operatorId=7,.expectedRevision=1,.memberName=fixture.name,.reason="operator request"},true);EXPECT_EQ(BotFleetCommandState::Accepted,accepted.state);EXPECT_EQ(0,manager.size());auto completed=admin.process(manager);ASSERT_EQ(1,completed.size());EXPECT_EQ(BotFleetCommandState::Completed,completed.front().state);EXPECT_EQ(1,manager.size());
+	(void)admin.submit({.type=BotFleetCommandType::Pause,.operatorId=7,.expectedRevision=1},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_TRUE(manager.fleetState().paused);(void)admin.submit({.type=BotFleetCommandType::Resume,.operatorId=7,.expectedRevision=1},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_FALSE(manager.fleetState().paused);
+	(void)admin.submit({.type=BotFleetCommandType::SetDesired,.operatorId=7,.expectedRevision=1,.value=1},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);ASSERT_EQ(2,admin.activeRevision()->revision);(void)admin.submit({.type=BotFleetCommandType::Reload,.operatorId=7,.expectedRevision=2},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_EQ(3,admin.activeRevision()->revision);
+	(void)admin.submit({.type=BotFleetCommandType::LogoutMember,.operatorId=7,.expectedRevision=3,.memberName=fixture.name},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_EQ(0,manager.size());EXPECT_FALSE(admin.audit().empty());admin.stop();ASSERT_TRUE(fixture.cleanup());
 }
 
 TEST(PlayerBotIntegrationTest, MultiBotCoordinationObservesPartyAndDelegatesFormationToM2) {
