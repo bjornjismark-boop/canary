@@ -348,16 +348,26 @@ Botten ska kunna återställa sin jaktberedskap och förbättra sig genom normal
 
 ### Leverabler
 
-- [ ] item valuation/profile
+- [x] item valuation/profile
 - [ ] sellable loot
 - [ ] buy list
 - [ ] NPC shop adapter
 - [ ] mat, potions och ammunition
-- [ ] equipment comparison
+- [x] equipment comparison
 - [ ] equip/unequip
 - [ ] pengar och köpbudget
 - [ ] depot eller definierad storage
 - [ ] återuppta avbruten hunt
+
+M6A-evidens: värdebaserade observationer av egen utrustning och bounded burna
+containers använder intrinsic player-visible itemmetadata, explicit PlayerBot-policy
+och legitimt kända NPC-priser som separata källor. Deterministisk rollspecifik
+scoring täcker requirements, slots, weapon/armor/shield-stats, range, modifiers,
+duration, weight, supplies, hysteresis, overflow och stabila tie-breakers utan att
+flytta, utrusta, köpa, sälja eller behålla Item/Container-ägarskap. Komplett gate:
+build 0, unit 300/300, databasbackad integration 62/62, diff 0. Source commit
+`6df23c044`. M6B shoptransaktioner och M6C depot/resupply/equipment execution
+återstår; full M6 är fortsatt öppen.
 
 ### Acceptance
 
