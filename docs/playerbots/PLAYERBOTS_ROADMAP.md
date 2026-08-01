@@ -509,6 +509,19 @@ databasbackad integration 95/95, diff 0. Source commit `1813e5e00`.
 Full M8 är fortsatt öppen för M8C:s durable persistence, reconstruction och bounded
 multi-session/long-duration acceptance.
 
+M8C levererar durable value-only checkpoints i den PlayerBot-ägda tabellen
+`player_bot_planner_state` med schema/migration 59, checksum, explicita versioner och
+strikt identity/policy/goal/plan/step/postcondition-validation. En verklig bounded
+campaign slutför tre skilda goals (hunt, resupply och return-home) genom M8B och
+auktoritativa M2/M3/M4-observationer, hanterar survival interruption och replan,
+sparar/loggar ut, skapar ny Player och BotSession, kräver fresh observation och
+återupptar endast verifierad boundary. Gate: build 0, unit 514/514,
+databasbackad integration 97/97, diff 0. Source commit `952a97a8c`.
+
+M8C är komplett men full M8 förblir öppen: roadmapens hunting-area suitability,
+skill target, faktisk configured target-level attainment, unsuitable-area switching
+och migration mellan planner-versioner saknar fortfarande full evidens.
+
 ### Mål
 
 Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment, access och quests.
@@ -523,7 +536,7 @@ Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment
 - [ ] skill target
 - [x] economy target
 - [x] risk- och failure history
-- [ ] persistent planner state
+- [x] persistent planner state
 - [x] resume efter restart
 - [x] deterministisk baselineplanner
 
