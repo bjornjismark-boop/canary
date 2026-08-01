@@ -1665,3 +1665,47 @@ TEST(PlayerBotIntegrationTest, AuthoritativeDeathPersistsTempleRecoveryAndRebuil
 	EXPECT_TRUE(manager.logout(fixture.name, false));
 	ASSERT_TRUE(fixture.cleanup());
 }
+
+namespace {
+	uint16_t equipmentType(const std::function<bool(const ItemType &)> &predicate) {
+		for (const auto &type : Item::items.getItems()) if (type.id && type.loaded && type.pickupable && predicate(type)) return type.id;
+		return 0;
+	}
+}
+
+TEST(PlayerBotIntegrationTest, EquipmentAssessmentObservesRealEquippedAndCarriedItemsWithoutMutation) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer());
+	const auto armorId=equipmentType([](const ItemType &type){return type.isArmor()&&type.armor>0;}); ASSERT_NE(0,armorId); auto armor=Item::CreateItem(armorId); std::static_pointer_cast<Cylinder>(player)->addThing(CONST_SLOT_ARMOR,armor);
+	const auto weaponId=equipmentType([](const ItemType &type){return type.isWeapon()&&type.attack>0&&(type.slotPosition&SLOTP_TWO_HAND)==0;}); ASSERT_NE(0,weaponId); auto weapon=Item::CreateItem(weaponId); auto backpack=Item::CreateItem(ITEM_BACKPACK); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(player,backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT)); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),weapon,INDEX_WHEREEVER,FLAG_NOLIMIT));
+	const auto armorBefore=player->getInventoryItem(CONST_SLOT_ARMOR); const auto carriedBefore=backpack->getContainer()->getItemTypeCount(weaponId); const auto observed=manager.evaluateEquipment(fixture.name);
+	EXPECT_NE(observed.items.end(),std::ranges::find_if(observed.items,[&](const auto &item){return item.itemTypeId==armorId&&item.equipped&&item.armor==armor->getArmor();}));
+	EXPECT_NE(observed.items.end(),std::ranges::find_if(observed.items,[&](const auto &item){return item.itemTypeId==weaponId&&!item.equipped&&item.attack==weapon->getAttack();}));
+	EXPECT_EQ(armorBefore,player->getInventoryItem(CONST_SLOT_ARMOR)); EXPECT_EQ(carriedBefore,backpack->getContainer()->getItemTypeCount(weaponId)); EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, EquipmentAssessmentReadsAuthoritativeRequirementsStatsAndCapacity) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer()); auto backpack=Item::CreateItem(ITEM_BACKPACK); ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(player,backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT));
+	const auto weaponId=equipmentType([](const ItemType &type){return type.isWeapon()&&type.attack>0&&type.minReqLevel>0;}); const auto armorId=equipmentType([](const ItemType &type){return type.isArmor()&&type.armor>0;}); const auto shieldId=equipmentType([](const ItemType &type){return type.isShield()&&type.defense>0;}); ASSERT_NE(0,weaponId);ASSERT_NE(0,armorId);ASSERT_NE(0,shieldId);
+	ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),Item::CreateItem(weaponId),INDEX_WHEREEVER,FLAG_NOLIMIT));ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),Item::CreateItem(armorId),INDEX_WHEREEVER,FLAG_NOLIMIT));ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),Item::CreateItem(shieldId),INDEX_WHEREEVER,FLAG_NOLIMIT));
+	const auto observed=manager.evaluateEquipment(fixture.name); EXPECT_EQ(player->getFreeCapacity(),observed.freeCapacity); EXPECT_EQ(player->getVocationId(),observed.vocationId);
+	const auto weapon=std::ranges::find(observed.items,weaponId,&BotItemObservation::itemTypeId);ASSERT_NE(observed.items.end(),weapon);EXPECT_EQ(Item::items[weaponId].minReqLevel,weapon->minimumLevel);EXPECT_EQ(Item::items[weaponId].attack,weapon->attack);
+	const auto armor=std::ranges::find(observed.items,armorId,&BotItemObservation::itemTypeId);ASSERT_NE(observed.items.end(),armor);EXPECT_EQ(Item::items[armorId].armor,armor->armor);
+	const auto shield=std::ranges::find(observed.items,shieldId,&BotItemObservation::itemTypeId);ASSERT_NE(observed.items.end(),shield);EXPECT_EQ(Item::items[shieldId].defense,shield->defense);
+	EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, EquipmentAssessmentTraversesOnlyBoundedOwnedContainersAndClassifiesSupplies) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game()); const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); auto player=std::const_pointer_cast<Player>(session->getPlayer()); auto backpack=Item::CreateItem(ITEM_BACKPACK),nested=Item::CreateItem(ITEM_BACKPACK);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(player,backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT));ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),nested,INDEX_WHEREEVER,FLAG_NOLIMIT));auto supply=Item::CreateItem(3031,12);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(nested->getContainer(),supply,INDEX_WHEREEVER,FLAG_NOLIMIT));
+	auto unrelated=Item::CreateItem(ITEM_BACKPACK);auto hidden=Item::CreateItem(3031,9);unrelated->getContainer()->internalAddThing(hidden);
+	BotEquipmentPolicy policy{.supplyItemTypeIds={3031},.maximumInventoryContainers=16,.maximumNestingDepth=2};const auto observed=manager.evaluateEquipment(fixture.name,policy);const auto found=std::ranges::find(observed.items,3031,&BotItemObservation::itemTypeId);ASSERT_NE(observed.items.end(),found);EXPECT_TRUE(found->supply);EXPECT_EQ(2U,found->path.childIndices.size());EXPECT_FALSE(observed.containerBudgetExceeded);
+	EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, EquipmentAssessmentUsesExplicitNpcPricesAndPreservesOrdinaryPlayerInventory) {
+	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);auto player=std::make_shared<Player>();player->setName(fixture.name);ASSERT_TRUE(IOLoginDataLoad::preLoadPlayer(player,fixture.name));ASSERT_TRUE(IOLoginData::loadPlayerById(player,fixture.playerId,false));player->setID();player->setOnline(true);ASSERT_TRUE(g_game().placeCreature(player,fixture.start,false,true));auto backpack=Item::CreateItem(ITEM_BACKPACK);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(player,backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT));auto item=Item::CreateItem(3031,5);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),item,INDEX_WHEREEVER,FLAG_NOLIMIT));
+	BotEquipmentPolicy policy{.knownPrices={{3031,100,50,BotItemValueSource::NpcObservation}}};const auto before=std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031);const auto observed=BotEquipment::observe(player,policy);const auto gold=std::ranges::find(observed.items,3031,&BotItemObservation::itemTypeId);ASSERT_NE(observed.items.end(),gold);EXPECT_EQ(100U,gold->knownNpcBuyPrice);EXPECT_EQ(50U,gold->knownNpcSellPrice);EXPECT_EQ(BotItemValueSource::NpcObservation,gold->priceSource);EXPECT_EQ(before,std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031));player->setOnline(false);const std::function<bool(const std::shared_ptr<Player>&)> noSave;EXPECT_EQ(ManagedPlayerRemovalResult::Complete,g_game().removeManagedPlayer(player,true,noSave));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, EquipmentAssessmentSessionCloseClearsStateAndFixtures) {
+	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);EXPECT_FALSE(manager.evaluateEquipment(fixture.name).containsWorldOwnership());ASSERT_NE(nullptr,session->getEquipmentObservation());EXPECT_TRUE(session->getEquipmentObservation()->has_value());EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_EQ(nullptr,session->getEquipmentObservation());EXPECT_TRUE(fixture.cleanup());EXPECT_FALSE(fixture.hasCommittedRows());
+}

@@ -54,6 +54,7 @@ public:
 	[[nodiscard]] BotLootTransferResult executeLoot(const std::string &, const BotLootTransferRequest &, std::chrono::milliseconds, const BotLootPolicy & = {}, const BotLootTransferPolicy & = {});
 	[[nodiscard]] BotSupplyAssessment evaluateSupplies(const std::string &, const BotSupplyPolicy & = {}, uint64_t expectedInventorySignature = 0);
 	[[nodiscard]] BotAdventureProgress advanceAdventure(const std::string &, const BotAdventureObservation &, std::chrono::milliseconds, const BotAdventurePolicy & = {});
+	[[nodiscard]] BotEquipmentObservation evaluateEquipment(const std::string &, const BotEquipmentPolicy & = {});
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

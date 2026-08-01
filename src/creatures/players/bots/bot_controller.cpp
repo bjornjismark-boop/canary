@@ -726,3 +726,10 @@ BotTransitionResult BotController::cancelTransition() {
 	transitionProgress.result = { { BotInteractionOutcome::Cancelled, BotTransitionFailure::Cancelled }, BotTransitionState::Cancelled };
 	return transitionProgress.result;
 }
+
+BotEquipmentObservation BotController::evaluateEquipment(const BotEquipmentPolicy &policy) {
+	const auto controlledPlayer = player.lock();
+	if (!controlledPlayer || controlledPlayer->isRemoved() || !controlledPlayer->getTile()) return {};
+	equipmentObservation = BotEquipment::observe(controlledPlayer, policy);
+	return *equipmentObservation;
+}

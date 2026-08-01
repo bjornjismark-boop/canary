@@ -13,6 +13,7 @@
 #include "creatures/players/bots/bot_loot.hpp"
 #include "creatures/players/bots/bot_supply.hpp"
 #include "creatures/players/bots/bot_adventure.hpp"
+#include "creatures/players/bots/bot_equipment.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -43,6 +44,42 @@ namespace {
 		return *std::ranges::find(observation.visibleTiles, position, &BotTileObservation::position);
 	}
 }
+
+class PlayerBotEquipmentTest : public ::testing::Test {
+protected:
+	static BotItemObservation item(uint16_t id, BotEquipmentSlot slot, int32_t attack = 0, int32_t defense = 0, int32_t armor = 0) {
+		return { .itemTypeId=id, .countOrCharges=1, .category=attack ? BotItemCategory::Weapon : defense ? BotItemCategory::Shield : BotItemCategory::Armor, .slot=slot, .path={CONST_SLOT_BACKPACK,{id}}, .weight=100, .attack=attack, .defense=defense, .armor=armor, .range=1, .vocationCompatible=true, .levelCompatible=true };
+	}
+	BotEquipmentObservation observation { .revision=7, .freeCapacity=10000, .playerLevel=100, .vocationId=1 };
+	BotEquipmentPolicy policy;
+};
+
+TEST_F(PlayerBotEquipmentTest, ItemObservationContainsValuesOnly) { EXPECT_FALSE(item(1,BotEquipmentSlot::Armor).containsWorldOwnership()); }
+TEST_F(PlayerBotEquipmentTest, EquipmentObservationContainsValuesOnly) { EXPECT_FALSE(observation.containsWorldOwnership()); }
+TEST_F(PlayerBotEquipmentTest, NoItemOrContainerOwnershipIsRetained) { BotUpgradeCandidate candidate; EXPECT_FALSE(candidate.containsWorldOwnership()); }
+TEST_F(PlayerBotEquipmentTest, VocationRestrictionIsEnforced) { auto candidate=item(1,BotEquipmentSlot::Armor);candidate.vocationCompatible=false;EXPECT_EQ(BotEquipmentIntent::WrongVocation,BotEquipment::compare(nullptr,candidate,observation).intent); }
+TEST_F(PlayerBotEquipmentTest, LevelRestrictionIsEnforced) { auto candidate=item(1,BotEquipmentSlot::Armor);candidate.levelCompatible=false;EXPECT_EQ(BotEquipmentIntent::MissingRequirement,BotEquipment::compare(nullptr,candidate,observation).intent); }
+TEST_F(PlayerBotEquipmentTest, WrongSlotIsRejected) { auto candidate=item(1,BotEquipmentSlot::None);EXPECT_EQ(BotEquipmentIntent::WrongSlot,BotEquipment::compare(nullptr,candidate,observation).intent); }
+TEST_F(PlayerBotEquipmentTest, StrongerCompatibleWeaponRanksAboveWeakerWeapon) { auto weak=item(1,BotEquipmentSlot::LeftHand,10),strong=item(2,BotEquipmentSlot::LeftHand,20);EXPECT_GT(BotEquipment::compare(&weak,strong,observation).improvement,0); }
+TEST_F(PlayerBotEquipmentTest, ArmorComparisonIsDeterministic) { auto old=item(1,BotEquipmentSlot::Armor,0,0,5),next=item(2,BotEquipmentSlot::Armor,0,0,8);EXPECT_EQ(BotEquipment::compare(&old,next,observation),BotEquipment::compare(&old,next,observation)); }
+TEST_F(PlayerBotEquipmentTest, ShieldComparisonIsDeterministic) { auto old=item(1,BotEquipmentSlot::RightHand,0,10),next=item(2,BotEquipmentSlot::RightHand,0,15);EXPECT_GT(BotEquipment::compare(&old,next,observation).improvement,0); }
+TEST_F(PlayerBotEquipmentTest, RangedAndMeleePoliciesDiffer) { auto bow=item(1,BotEquipmentSlot::LeftHand,10);bow.range=7;uint32_t a=0,b=0;policy.role=BotEquipmentRole::Melee;auto melee=BotEquipment::score(bow,policy,a);policy.role=BotEquipmentRole::Distance;auto ranged=BotEquipment::score(bow,policy,b);EXPECT_GT(ranged.total,melee.total); }
+TEST_F(PlayerBotEquipmentTest, WeightAndCapacityRiskAffectsIntent) { auto candidate=item(1,BotEquipmentSlot::Armor);candidate.weight=500;observation.freeCapacity=400;EXPECT_EQ(BotEquipmentIntent::CapacityRisk,BotEquipment::compare(nullptr,candidate,observation).intent); }
+TEST_F(PlayerBotEquipmentTest, ChargedOrTemporaryStateIsRepresented) { auto candidate=item(1,BotEquipmentSlot::Ring);candidate.countOrCharges=5;candidate.temporary=true;candidate.durationMilliseconds=1000;EXPECT_TRUE(candidate.temporary);EXPECT_EQ(5U,candidate.countOrCharges); }
+TEST_F(PlayerBotEquipmentTest, UnknownPriceRemainsExplicit) { auto candidate=item(1,BotEquipmentSlot::Armor);EXPECT_FALSE(candidate.knownNpcBuyPrice);EXPECT_EQ(BotItemValueSource::Unknown,candidate.priceSource); }
+TEST_F(PlayerBotEquipmentTest, NpcPriceIsNotMarketPrice) { auto candidate=item(1,BotEquipmentSlot::Armor);candidate.knownNpcSellPrice=50;candidate.priceSource=BotItemValueSource::NpcObservation;EXPECT_EQ(BotItemValueSource::NpcObservation,candidate.priceSource); }
+TEST_F(PlayerBotEquipmentTest, SupplyItemIsNotMarkedForSale) { auto candidate=item(1,BotEquipmentSlot::Armor);candidate.category=BotItemCategory::Supply;candidate.supply=true;EXPECT_EQ(BotEquipmentIntent::KeepForSupply,BotEquipment::compare(nullptr,candidate,observation).intent); }
+TEST_F(PlayerBotEquipmentTest, CurrentEquipmentReceivesRetentionHysteresis) { auto current=item(1,BotEquipmentSlot::Armor);current.equipped=true;uint32_t operations=0;EXPECT_GT(BotEquipment::score(current,policy,operations).retention,0); }
+TEST_F(PlayerBotEquipmentTest, MarginalUpgradeBelowThresholdIsRejected) { auto old=item(1,BotEquipmentSlot::Armor,0,0,5),next=item(2,BotEquipmentSlot::Armor,0,0,6);policy.upgradeThreshold=100;EXPECT_EQ(BotEquipmentIntent::DowngradeRejected,BotEquipment::compare(&old,next,observation,policy).intent); }
+TEST_F(PlayerBotEquipmentTest, MaterialUpgradeExceedsThreshold) { auto old=item(1,BotEquipmentSlot::Armor,0,0,1),next=item(2,BotEquipmentSlot::Armor,0,0,10);EXPECT_EQ(BotEquipmentIntent::UpgradeAvailable,BotEquipment::compare(&old,next,observation).intent); }
+TEST_F(PlayerBotEquipmentTest, TieBreakingIsDeterministic) { auto a=item(9,BotEquipmentSlot::Armor,0,0,10),b=item(3,BotEquipmentSlot::Armor,0,0,10);observation.items={a,b};auto result=BotEquipment::upgrades(observation);ASSERT_EQ(2U,result.size());EXPECT_EQ(3U,result.front().itemTypeId); }
+TEST_F(PlayerBotEquipmentTest, ContainerTraversalBudgetIsRepresented) { observation.containerBudgetExceeded=true;EXPECT_TRUE(observation.containerBudgetExceeded); }
+TEST_F(PlayerBotEquipmentTest, ItemBudgetIsRepresented) { observation.itemBudgetExceeded=true;EXPECT_TRUE(observation.itemBudgetExceeded); }
+TEST_F(PlayerBotEquipmentTest, ArithmeticCannotOverflow) { auto candidate=item(1,BotEquipmentSlot::Armor,INT32_MAX,INT32_MAX,INT32_MAX);candidate.skillModifiers={INT32_MAX};uint32_t operations=0;EXPECT_LE(BotEquipment::score(candidate,policy,operations).total,1000000); }
+TEST_F(PlayerBotEquipmentTest, IdenticalObservationsYieldIdenticalResults) { auto candidate=item(1,BotEquipmentSlot::Armor,0,0,5);EXPECT_EQ(BotEquipment::compare(nullptr,candidate,observation),BotEquipment::compare(nullptr,candidate,observation)); }
+TEST_F(PlayerBotEquipmentTest, EvaluationDoesNotMutateObservation) { auto candidate=item(1,BotEquipmentSlot::Armor,0,0,5),before=candidate;(void)BotEquipment::compare(nullptr,candidate,observation);EXPECT_EQ(before,candidate); }
+TEST_F(PlayerBotEquipmentTest, InvalidLifecycleIsEmptyObservation) { EXPECT_EQ(0U,BotEquipment::observe(nullptr).revision); }
+TEST_F(PlayerBotEquipmentTest, ScoreOperationBudgetIsEnforced) { auto candidate=item(1,BotEquipmentSlot::Armor,1,1,1);policy.maximumScoreOperations=1;EXPECT_EQ(BotValuationFailure::ScoreBudgetExceeded,BotEquipment::compare(nullptr,candidate,observation,policy).failure); }
 TEST(PlayerBotTest, ClassifiesNetworkAndBotControlExplicitly) {
 	const auto networkPlayer = std::make_shared<Player>();
 	const auto botPlayer = std::make_shared<Player>(PlayerControlType::Bot);

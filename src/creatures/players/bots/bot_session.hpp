@@ -61,6 +61,7 @@ public:
 	[[nodiscard]] const BotSurvivalProgress *getSurvivalProgress() const { return controller ? &controller->getSurvivalProgress() : nullptr; }
 	[[nodiscard]] const BotLootExecutionProgress *getLootProgress() const { return controller ? &controller->getLootProgress() : nullptr; }
 	[[nodiscard]] const BotAdventureProgress *getAdventureProgress() const { return controller ? &controller->getAdventureProgress() : nullptr; }
+	[[nodiscard]] const std::optional<BotEquipmentObservation> *getEquipmentObservation() const { return controller ? &controller->getEquipmentObservation() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -90,6 +91,7 @@ private:
 	[[nodiscard]] BotLootTransferResult executeLoot(const BotLootTransferRequest &, std::chrono::milliseconds, const BotLootPolicy &, const BotLootTransferPolicy &);
 	[[nodiscard]] BotSupplyAssessment evaluateSupplies(const BotSupplyPolicy &, uint64_t expectedInventorySignature);
 	[[nodiscard]] BotAdventureProgress advanceAdventure(const BotAdventureObservation &, std::chrono::milliseconds, const BotAdventurePolicy &);
+	[[nodiscard]] BotEquipmentObservation evaluateEquipment(const BotEquipmentPolicy &);
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

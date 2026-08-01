@@ -13,6 +13,7 @@
 #include "creatures/players/bots/bot_loot.hpp"
 #include "creatures/players/bots/bot_supply.hpp"
 #include "creatures/players/bots/bot_adventure.hpp"
+#include "creatures/players/bots/bot_equipment.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -66,6 +67,8 @@ public:
 	[[nodiscard]] BotAdventureProgress advanceAdventure(const BotAdventureObservation &, std::chrono::milliseconds, const BotAdventurePolicy & = {});
 	[[nodiscard]] BotAdventureProgress cancelAdventure();
 	[[nodiscard]] const BotAdventureProgress &getAdventureProgress() const { return adventureProgress; }
+	[[nodiscard]] BotEquipmentObservation evaluateEquipment(const BotEquipmentPolicy & = {});
+	[[nodiscard]] const std::optional<BotEquipmentObservation> &getEquipmentObservation() const { return equipmentObservation; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -90,4 +93,5 @@ private:
 	BotLootExecutionProgress lootProgress;
 	bool survivalLootBlocked = false;
 	BotAdventureProgress adventureProgress;
+	std::optional<BotEquipmentObservation> equipmentObservation;
 };
