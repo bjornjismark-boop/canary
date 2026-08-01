@@ -39,13 +39,14 @@ class LiveSoakTest(unittest.TestCase):
             root=Path(tmp); config=root/"config.lua"; config.write_text('ip = "127.0.0.1"\n')
             output=root/"output"; output.mkdir()
             env={"TEST_DB_USER":"u", "TEST_DB_PASSWORD":'p"q'}
-            with mock.patch.object(soak,"allocate_ports",return_value=[17171,17172,17173]):
+            with mock.patch.object(soak,"allocate_ports",return_value=[17171,17172,17173,17174,17175]):
                 runtime,ports=soak.create_runtime_directory(config,output,root,env,"playerbots_test_live",2)
             self.assertEqual(0o600, runtime.joinpath("config.lua").stat().st_mode & 0o777)
-            self.assertEqual(3,len(set(ports.values())))
+            self.assertEqual(5,len(set(ports.values())))
             self.assertIn('mysqlPass = "p\\"q"',runtime.joinpath("config.lua").read_text())
             fleet=__import__("json").loads(runtime.joinpath("config/playerbots.json").read_text())
             self.assertEqual(2,len(fleet["members"]))
+            self.assertNotIn("Ordinary Soak",[member["name"] for member in fleet["members"]])
     def test_lua_config_rejects_controls(self):
         with self.assertRaises(soak.SoakError): soak.lua_string("bad\nvalue")
     def test_pid_identity_and_exit(self):
@@ -59,6 +60,7 @@ class LiveSoakTest(unittest.TestCase):
         value=soak.parse_tick_snapshot('{"samples":4,"p50Us":100,"p95Us":500,"p99Us":500,"maxUs":700}')
         self.assertEqual(4,value["samples"])
         with self.assertRaises(soak.SoakError): soak.parse_tick_snapshot('{"samples":4,"p50Us":9,"p95Us":8,"p99Us":10,"maxUs":10}')
+        self.assertEqual(250,soak.parse_tick_snapshot('{"samples":1,"p50Us":250,"p95Us":250,"p99Us":250,"maxUs":157}')["p99Us"])
     def test_merged_dispatcher_histogram_percentile(self):
         ticks=[{"samples":2,"maxUs":80,"buckets":[1,1,0],"bucketUpperBoundsUs":[50,100]},
                {"samples":2,"maxUs":200,"buckets":[0,1,1],"bucketUpperBoundsUs":[50,100]}]
