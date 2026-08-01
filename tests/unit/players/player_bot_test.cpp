@@ -22,6 +22,7 @@
 #include "creatures/players/bots/bot_planner.hpp"
 #include "creatures/players/bots/bot_plan_execution.hpp"
 #include "creatures/players/bots/bot_planner_persistence.hpp"
+#include "creatures/players/bots/bot_progression.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -898,7 +899,7 @@ TEST(PlayerBotPlanExecutionTest,IdenticalObservationsProduceIdenticalArbitration
 
 namespace {
 BotPersistedPlanCheckpoint persistedCheckpoint(){BotPersistedPlanCheckpoint c{.playerId=10,.checkpointRevision=5,.policyRevision=1,.goalId=8,.goalType=BotGoalType::IdleSafely,.planRevision=1,.verifiedStepIndex=1,.verifiedSubsystem=BotPlanSubsystem::Observation,.safeSaveBoundary=true};c.checksum=BotPlannerPersistence::checksum(c);return c;}
-BotCheckpointValidation checkpointValidation(){return{.playerId=10,.schemaVersion=1,.policyRevision=1,.goalIds={8},.planRevisions={1},.planStepCount=3,.postconditionValid=true,.observationFresh=true};}
+BotCheckpointValidation checkpointValidation(){return{.playerId=10,.schemaVersion=2,.policyRevision=1,.goalIds={8},.planRevisions={1},.planStepCount=3,.postconditionValid=true,.observationFresh=true};}
 BotLongCampaignBudget campaignBudget(){BotLongCampaignBudget b;b.maximumPlannerTicks=3;b.maximumCompletedGoals=8;b.maximumReplans=2;b.maximumSubsystemFailures=2;b.maximumConsecutiveIdleCycles=2;b.maximumPersistedCheckpoints=2;b.maximumSaveCycles=2;b.maximumSessionReconstructions=2;b.requiredCompletedGoals=3;return b;}
 }
 TEST(PlayerBotPlannerPersistenceTest,PersistedCheckpointContainsValuesOnly){EXPECT_FALSE(persistedCheckpoint().containsWorldOwnership());}
@@ -911,7 +912,7 @@ TEST(PlayerBotPlannerPersistenceTest,FailedPersistenceDoesNotMarkDurability){EXP
 TEST(PlayerBotPlannerPersistenceTest,ValidCheckpointLoads){EXPECT_TRUE(BotPlannerPersistence::validate(persistedCheckpoint(),checkpointValidation()).checkpoint);}
 TEST(PlayerBotPlannerPersistenceTest,MissingCheckpointIsExplicit){EXPECT_EQ(BotCheckpointLoadReason::Missing,BotCheckpointLoadResult{}.reason);}
 TEST(PlayerBotPlannerPersistenceTest,CorruptCheckpointIsRejected){auto c=persistedCheckpoint();++c.checksum;EXPECT_EQ(BotCheckpointLoadReason::Corrupt,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
-TEST(PlayerBotPlannerPersistenceTest,UnsupportedVersionIsRejected){auto c=persistedCheckpoint();c.schemaVersion=2;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotCheckpointLoadReason::UnsupportedVersion,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
+TEST(PlayerBotPlannerPersistenceTest,UnsupportedVersionIsRejected){auto c=persistedCheckpoint();c.schemaVersion=3;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotCheckpointLoadReason::UnsupportedVersion,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
 TEST(PlayerBotPlannerPersistenceTest,PolicyRevisionMismatchIsRejected){auto c=persistedCheckpoint();c.policyRevision=2;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotCheckpointLoadReason::PolicyRevisionChanged,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
 TEST(PlayerBotPlannerPersistenceTest,MissingPlanIsRejected){auto v=checkpointValidation();v.planRevisions.clear();EXPECT_EQ(BotCheckpointLoadReason::PlanMissing,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
 TEST(PlayerBotPlannerPersistenceTest,UnavailableGoalIsRejected){auto v=checkpointValidation();v.goalIds.clear();EXPECT_EQ(BotCheckpointLoadReason::GoalUnavailable,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
@@ -934,3 +935,43 @@ TEST(PlayerBotPlannerPersistenceTest,RepeatedIdenticalEventsRemainDeterministic)
 TEST(PlayerBotPlannerPersistenceTest,TeardownClearsLoadedAndPendingCheckpointState){BotCheckpointLoadResult r{.checkpoint=persistedCheckpoint()};r.checkpoint.reset();EXPECT_FALSE(r.checkpoint);}
 TEST(PlayerBotPlannerPersistenceTest,NoGameplayStorageMutationIsUsed){EXPECT_EQ(BotCheckpointLoadReason::Valid,BotPlannerPersistence::validate(persistedCheckpoint(),checkpointValidation()).reason);}
 TEST(PlayerBotPlannerPersistenceTest,EveryUnsafeSubsystemBoundaryBlocksPersistence){auto e=executionFixture();BotCheckpointBoundary b;b.dialoguePending=true;EXPECT_FALSE(BotPlannerPersistence::capture(10,e,BotPlanSubsystem::Dialogue,b).safeSaveBoundary);b={};b.shopPending=true;EXPECT_FALSE(BotPlannerPersistence::capture(10,e,BotPlanSubsystem::Resupply,b).safeSaveBoundary);b={};b.depotPending=true;EXPECT_FALSE(BotPlannerPersistence::capture(10,e,BotPlanSubsystem::Resupply,b).safeSaveBoundary);}
+
+namespace {
+BotProgressionTarget progressionTarget(){return{.level={20},.skills={{.type=BotSkillType::Sword,.level=15,.requiredVocationId=1,.requiredWeaponType=WEAPON_SWORD}},.policyRevision=1};}
+BotProgressionObservation progressionObservation(uint64_t revision=1){return{.revision=revision,.level=10,.experience=100,.vocationId=1,.weaponType=WEAPON_SWORD,.skills={{.type=BotSkillType::Sword,.level=14}}};}
+BotHuntAreaPolicy areaPolicy(uint32_t id=1){return{.id=id,.region={{100,100,7},4},.minimumLevel=8,.maximumLevel=30,.vocationIds={1},.revision=7};}
+BotHuntAreaWindow areaWindow(std::function<void(BotHuntAreaObservation&)> edit={}){BotHuntAreaWindow w;for(uint64_t i=1;i<=3;++i){BotHuntAreaObservation o{.areaId=1,.revision=i,.policyRevision=7,.encounters=1,.successfulKills=1,.observedExperience=50,.elapsedTicks=100};if(edit)edit(o);w.record(o);}return w;}
+}
+TEST(PlayerBotProgressionTest,TargetsContainValuesOnly){EXPECT_FALSE(progressionTarget().containsWorldOwnership);}
+TEST(PlayerBotProgressionTest,LevelTargetValidation){auto t=progressionTarget();t.level.level=0;EXPECT_EQ(BotProgressionState::Invalid,BotProgression::assess(t,progressionObservation()).levelState);}
+TEST(PlayerBotProgressionTest,AlreadyAttainedLevelTarget){auto o=progressionObservation();o.level=20;EXPECT_EQ(BotProgressionState::Attained,BotProgression::assess(progressionTarget(),o).levelState);}
+TEST(PlayerBotProgressionTest,BelowTargetLevelStartsCombat){EXPECT_TRUE(BotProgression::assess(progressionTarget(),progressionObservation()).startProgressionCombat);}
+TEST(PlayerBotProgressionTest,AuthoritativeObservationCompletesTarget){auto o=progressionObservation();o.level=20;o.skills[0].level=15;auto a=BotProgression::assess(progressionTarget(),o);EXPECT_TRUE(a.terminal);EXPECT_FALSE(a.startProgressionCombat);}
+TEST(PlayerBotProgressionTest,CompletedTargetIsTerminal){auto o=progressionObservation();o.level=99;o.skills[0].level=99;EXPECT_TRUE(BotProgression::assess(progressionTarget(),o).terminal);}
+TEST(PlayerBotProgressionTest,ValidSkillTargetIsBelowTarget){EXPECT_EQ(BotProgressionState::BelowTarget,BotProgression::assess(progressionTarget(),progressionObservation()).skillStates[0]);}
+TEST(PlayerBotProgressionTest,AlreadyAttainedSkillTarget){auto o=progressionObservation();o.skills[0].level=15;EXPECT_EQ(BotProgressionState::Attained,BotProgression::assess(progressionTarget(),o).skillStates[0]);}
+TEST(PlayerBotProgressionTest,ObservedSkillTriesAreProgressing){auto o=progressionObservation();o.skills[0].tries=1;EXPECT_EQ(BotProgressionState::Progressing,BotProgression::assess(progressionTarget(),o).skillStates[0]);}
+TEST(PlayerBotProgressionTest,InapplicableVocationIsRejected){auto o=progressionObservation();o.vocationId=2;EXPECT_EQ(BotProgressionState::Inapplicable,BotProgression::assess(progressionTarget(),o).skillStates[0]);}
+TEST(PlayerBotProgressionTest,WeaponPolicyBlocksMismatch){auto o=progressionObservation();o.weaponType=WEAPON_AXE;EXPECT_EQ(BotProgressionState::Blocked,BotProgression::assess(progressionTarget(),o).skillStates[0]);}
+TEST(PlayerBotProgressionTest,StaleObservationIsRejected){EXPECT_EQ(BotProgressionState::ObservationStale,BotProgression::assess(progressionTarget(),progressionObservation(2),2).levelState);}
+TEST(PlayerBotProgressionTest,SuitabilityContainsValuesOnly){EXPECT_FALSE(areaWindow().samples.front().containsWorldOwnership);}
+TEST(PlayerBotProgressionTest,SuitableAreaIsDeterministic){auto a=BotProgression::assessArea(areaPolicy(),areaWindow(),10,1);EXPECT_EQ(BotHuntAreaSuitability::Suitable,a.suitability);EXPECT_EQ(a,BotProgression::assessArea(areaPolicy(),areaWindow(),10,1));}
+TEST(PlayerBotProgressionTest,TooDangerousAreaIsDetected){auto w=areaWindow([](auto&o){o.failedCombats=1;});EXPECT_EQ(BotHuntAreaSuitability::TooDangerous,BotProgression::assessArea(areaPolicy(),w,10,1).suitability);}
+TEST(PlayerBotProgressionTest,TooWeakAreaIsDetected){auto w=areaWindow([](auto&o){o.observedExperience=0;});EXPECT_EQ(BotHuntAreaSuitability::TooWeak,BotProgression::assessArea(areaPolicy(),w,10,1).suitability);}
+TEST(PlayerBotProgressionTest,NoTargetAreaIsDetected){auto w=areaWindow([](auto&o){o.encounters=0;o.successfulKills=0;o.noTargetCycles=1;});EXPECT_EQ(BotHuntAreaSuitability::NoEligibleTargets,BotProgression::assessArea(areaPolicy(),w,10,1).suitability);}
+TEST(PlayerBotProgressionTest,RouteUnreliableAreaIsDetected){auto w=areaWindow([](auto&o){o.routeFailures=1;});EXPECT_EQ(BotHuntAreaSuitability::RouteUnreliable,BotProgression::assessArea(areaPolicy(),w,10,1).suitability);}
+TEST(PlayerBotProgressionTest,SupplyInefficientAreaIsDetected){auto w=areaWindow([](auto&o){o.successfulKills=0;o.healingUses=2;});EXPECT_EQ(BotHuntAreaSuitability::SupplyInefficient,BotProgression::assessArea(areaPolicy(),w,10,1).suitability);}
+TEST(PlayerBotProgressionTest,RepeatedDeathIsDetected){auto w=areaWindow([](auto&o){o.deathCount=1;});EXPECT_EQ(BotHuntAreaSuitability::RepeatedDeath,BotProgression::assessArea(areaPolicy(),w,10,1).suitability);}
+TEST(PlayerBotProgressionTest,InsufficientEvidenceRemainsUnknown){auto w=areaWindow();w.samples.resize(2);EXPECT_EQ(BotHuntAreaSuitability::ObservationInsufficient,BotProgression::assessArea(areaPolicy(),w,10,1).suitability);}
+TEST(PlayerBotProgressionTest,ObservationWindowIsBounded){BotHuntAreaWindow w{.maximumSamples=2};w.record({.areaId=1});w.record({.areaId=1});w.record({.areaId=1});EXPECT_EQ(2,w.samples.size());}
+TEST(PlayerBotProgressionTest,OldAreaSamplesAreCleared){auto w=areaWindow();w.record({.areaId=2});w.clearFor(2);EXPECT_TRUE(std::ranges::all_of(w.samples,[](auto&o){return o.areaId==2;}));}
+TEST(PlayerBotProgressionTest,UnsuitableAreaSwitchesDeterministically){BotAreaSwitchState s{.activeAreaId=1};BotAreaSwitchPolicy p{.areas={areaPolicy(1),areaPolicy(2)},.revision=1};BotHuntAreaAssessment a{.suitability=BotHuntAreaSuitability::TooDangerous,.failure=BotHuntAreaFailure::Danger,.sampleCount=3,.observationRevision=1};auto d=BotProgression::decideSwitch(s,p,a,false);EXPECT_EQ(BotAreaSwitchResult::Switch,d.result);EXPECT_EQ(2,d.toAreaId);}
+TEST(PlayerBotProgressionTest,PendingActionDelaysSwitch){BotAreaSwitchState s{.activeAreaId=1};BotAreaSwitchPolicy p{.areas={areaPolicy(1),areaPolicy(2)},.revision=1};BotHuntAreaAssessment a{.suitability=BotHuntAreaSuitability::TooDangerous,.sampleCount=3,.observationRevision=1};EXPECT_EQ(BotAreaSwitchResult::WaitForBoundary,BotProgression::decideSwitch(s,p,a,true).result);}
+TEST(PlayerBotProgressionTest,AllAlternativesExhaustSafely){BotAreaSwitchState s{.activeAreaId=1,.previousAreaId=2};BotAreaSwitchPolicy p{.areas={areaPolicy(1),areaPolicy(2)},.revision=1};BotHuntAreaAssessment a{.suitability=BotHuntAreaSuitability::TooDangerous,.sampleCount=3,.observationRevision=1};EXPECT_EQ(BotAreaSwitchResult::Exhausted,BotProgression::decideSwitch(s,p,a,false).result);EXPECT_TRUE(s.terminal);}
+TEST(PlayerBotProgressionTest,AreaSwitchHysteresisPreventsOscillation){BotAreaSwitchState s{.activeAreaId=2,.previousAreaId=1,.policyRevision=1,.cooldownRemaining=2};BotAreaSwitchPolicy p{.areas={areaPolicy(1),areaPolicy(2)},.revision=1};BotHuntAreaAssessment a{.suitability=BotHuntAreaSuitability::TooDangerous,.sampleCount=3,.observationRevision=1};EXPECT_EQ(BotAreaSwitchResult::Cooldown,BotProgression::decideSwitch(s,p,a,false).result);}
+TEST(PlayerBotPlannerPersistenceTest,CurrentCheckpointNeedsFreshObservation){EXPECT_EQ(BotPlannerMigrationResult::Current,BotPlannerPersistence::migrate(persistedCheckpoint(),10).result);}
+TEST(PlayerBotPlannerPersistenceTest,PreviousCheckpointMigratesSafely){auto c=persistedCheckpoint();c.schemaVersion=1;c.failureCount=99;c.checksum=BotPlannerPersistence::checksum(c);auto m=BotPlannerPersistence::migrate(c,10);ASSERT_EQ(BotPlannerMigrationResult::Migrated,m.result);EXPECT_EQ(2,m.checkpoint->schemaVersion);EXPECT_TRUE(m.freshObservationRequired);EXPECT_LE(m.checkpoint->failureCount,16);}
+TEST(PlayerBotPlannerPersistenceTest,UnsupportedOldMigrationIsRejected){auto c=persistedCheckpoint();c.schemaVersion=0;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotPlannerMigrationResult::UnsupportedOlderVersion,BotPlannerPersistence::migrate(c,10).result);}
+TEST(PlayerBotPlannerPersistenceTest,FutureMigrationIsRejected){auto c=persistedCheckpoint();c.schemaVersion=3;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotPlannerMigrationResult::UnsupportedFutureVersion,BotPlannerPersistence::migrate(c,10).result);}
+TEST(PlayerBotPlannerPersistenceTest,CorruptMigrationIsRejected){auto c=persistedCheckpoint();++c.checksum;EXPECT_EQ(BotPlannerMigrationResult::Corrupt,BotPlannerPersistence::migrate(c,10).result);}
+TEST(PlayerBotPlannerPersistenceTest,MigrationPlayerMismatchIsRejected){EXPECT_EQ(BotPlannerMigrationResult::PlayerMismatch,BotPlannerPersistence::migrate(persistedCheckpoint(),11).result);}

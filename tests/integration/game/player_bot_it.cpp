@@ -13,9 +13,11 @@
 #include "creatures/players/bots/bot_planner.hpp"
 #include "creatures/players/bots/bot_plan_execution.hpp"
 #include "creatures/players/bots/bot_planner_persistence.hpp"
+#include "creatures/players/bots/bot_progression.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
 #include "creatures/players/player.hpp"
+#include "creatures/players/vocations/vocation.hpp"
 #include "creatures/monsters/monster.hpp"
 #include "creatures/monsters/monsters.hpp"
 #include "creatures/npcs/npc.hpp"
@@ -229,6 +231,26 @@ namespace {
 		std::fflush(stderr);
 		return nullptr;
 	}
+}
+
+TEST(PlayerBotIntegrationTest, ProgressionTargetAttainsThroughOrdinaryCombatAndPersists) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); createWalkableTile(Position(fixture.start.x+1,fixture.start.y,fixture.start.z));
+	const uint32_t startingLevel=8,targetLevel=9;const auto startingExperience=Player::getExpForLevel(targetLevel)-10;
+	ASSERT_TRUE(g_database().executeQuery("UPDATE `players` SET `level`="+std::to_string(startingLevel)+",`experience`="+std::to_string(startingExperience)+" WHERE `id`="+std::to_string(fixture.playerId)));
+	BotManager manager(g_game());auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());
+	BotProgressionTarget target{.level={targetLevel},.policyRevision=1};auto before=BotProgression::observe(player,1);EXPECT_EQ(BotProgressionState::BelowTarget,BotProgression::assess(target,before).levelState);
+	auto type=std::make_shared<MonsterType>("ProgressionTargetMonster");type->info.health=10;type->info.healthMax=10;type->info.experience=100;type->info.lookcorpse=3994;auto monster=std::make_shared<Monster>(type);ASSERT_TRUE(g_game().placeCreature(monster,Position(fixture.start.x+1,fixture.start.y,fixture.start.z),false,true));
+	const auto selection=manager.evaluateCombat(fixture.name);ASSERT_EQ(monster->getID(),selection.selectedCreatureId);
+	UPDATE_OTSYS_TIME();CombatDamage fatal;fatal.primary={COMBAT_PHYSICALDAMAGE,-1000};ASSERT_TRUE(g_game().combatChangeHealth(player,monster,fatal));monster->onDeath();ASSERT_GE(player->getLevel(),targetLevel);
+	auto attained=BotProgression::assess(target,BotProgression::observe(player,2));EXPECT_TRUE(attained.terminal);EXPECT_FALSE(attained.startProgressionCombat);EXPECT_TRUE(manager.logout(fixture.name,true));
+	BotManager reloaded(g_game());auto next=loginBotOrReport(reloaded,fixture.name);ASSERT_NE(nullptr,next);auto loaded=std::const_pointer_cast<Player>(next->getPlayer());EXPECT_TRUE(BotProgression::assess(target,BotProgression::observe(loaded,3)).terminal);EXPECT_TRUE(reloaded.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, ProgressionObservesAuthoritativeSkillAndMigratesPersistedCheckpoint) {
+	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());
+	const auto skillBefore=player->getSkillLevel(SKILL_SWORD);player->addSkillAdvance(SKILL_SWORD,player->getVocation()->getReqSkillTries(SKILL_SWORD,skillBefore+1));const auto observed=BotProgression::observe(player,1,WEAPON_SWORD);EXPECT_GT(player->getSkillLevel(SKILL_SWORD),skillBefore);BotProgressionTarget target{.level={player->getLevel()},.skills={{.type=BotSkillType::Sword,.level=player->getSkillLevel(SKILL_SWORD),.requiredVocationId=player->getVocationId(),.requiredWeaponType=WEAPON_SWORD}},.policyRevision=1};EXPECT_TRUE(BotProgression::assess(target,observed).terminal);
+	BotPersistedPlanCheckpoint old{.playerId=fixture.playerId,.schemaVersion=1,.checkpointRevision=1,.policyRevision=1,.goalId=1,.goalType=BotGoalType::GainConfiguredProgress,.planRevision=1,.safeSaveBoundary=true};old.checksum=BotPlannerPersistence::checksum(old);
+	std::ostringstream q;q<<"INSERT INTO `player_bot_planner_state` (`player_id`,`schema_version`,`checkpoint_revision`,`policy_revision`,`goal_id`,`goal_type`,`plan_revision`,`verified_step_index`,`verified_subsystem`,`failure_count`,`retry_count`,`configured_target_id`,`region_x`,`region_y`,`region_z`,`safe_boundary`,`checksum`) VALUES ("<<old.playerId<<",1,1,1,1,"<<static_cast<uint16_t>(old.goalType)<<",1,0,0,0,0,0,0,0,0,1,"<<old.checksum<<")";ASSERT_TRUE(g_database().executeQuery(q.str()));auto loaded=BotPlannerPersistence::load(fixture.playerId);ASSERT_EQ(BotCheckpointLoadReason::Valid,loaded.reason);ASSERT_TRUE(loaded.checkpoint);EXPECT_EQ(2,loaded.checkpoint->schemaVersion);EXPECT_TRUE(loaded.freshObservationRequired);EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_TRUE(BotPlannerPersistence::erase(fixture.playerId));ASSERT_TRUE(fixture.cleanup());
 }
 
 TEST(PlayerBotIntegrationTest, LocalWalkabilityUsesRealWorldStateAndRevalidatesBeforeMovement) {

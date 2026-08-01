@@ -314,6 +314,7 @@
 	<ClCompile Include="..\src\creatures\players\bots\bot_planner.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_plan_execution.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_planner_persistence.cpp" />
+	<ClCompile Include="..\src\creatures\players\bots\bot_progression.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_controller.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_interaction.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_manager.cpp" />
