@@ -201,6 +201,7 @@ BotDeathResult BotSession::observeDeath() { if (!controller) return { .state = B
 BotLootSelectionResult BotSession::evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature, const BotLootPolicy &policy) { if (state != BotSessionState::Placed || !controller) return { .eligibility = BotLootEligibility::InvalidLifecycle, .failure = BotLootFailure::InvalidLifecycle }; return controller->evaluateLoot(position, sourceCreatureId, expectedSignature, policy); }
 BotLootTransferResult BotSession::executeLoot(const BotLootTransferRequest &r, std::chrono::milliseconds n, const BotLootPolicy &p, const BotLootTransferPolicy &t) { if(state!=BotSessionState::Placed||!controller)return{.outcome=BotLootTransferOutcome::Cancelled,.failure=BotLootTransferFailure::InvalidLifecycle,.state=BotLootExecutionState::Failed,.request=r};return controller->executeLoot(r,n,p,t); }
 BotSupplyAssessment BotSession::evaluateSupplies(const BotSupplyPolicy &policy, uint64_t expectedInventorySignature) { if (state != BotSessionState::Placed || !controller) return { .urgency=BotSupplyUrgency::Critical,.intent=BotSupplyIntent::ObservationStale,.failure=BotSupplyFailure::InvalidLifecycle }; return controller->evaluateSupplies(policy, expectedInventorySignature); }
+BotAdventureProgress BotSession::advanceAdventure(const BotAdventureObservation &observation, std::chrono::milliseconds now, const BotAdventurePolicy &policy) { if(state!=BotSessionState::Placed||!controller)return{.state=BotAdventureState::Failed,.failure=BotAdventureFailure::InvalidLifecycle};return controller->advanceAdventure(observation,now,policy); }
 
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
@@ -275,7 +276,7 @@ bool BotSession::retryPendingSave() {
 }
 
 void BotSession::finishClose() {
-	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); controller->cancelCombat(); controller->cancelSurvival(); (void)controller->cancelLoot(); }
+	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); controller->cancelCombat(); controller->cancelSurvival(); (void)controller->cancelLoot(); (void)controller->cancelAdventure(); }
 	controller.reset();
 	player.reset();
 	state = BotSessionState::Closed;

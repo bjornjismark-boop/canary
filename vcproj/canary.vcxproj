@@ -302,6 +302,7 @@
 	<ClCompile Include="..\src\creatures\players\bots\bot_survival.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_loot.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_supply.cpp" />
+	<ClCompile Include="..\src\creatures\players\bots\bot_adventure.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_controller.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_interaction.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_manager.cpp" />

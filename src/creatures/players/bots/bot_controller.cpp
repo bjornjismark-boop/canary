@@ -100,7 +100,7 @@ BotDeathResult BotController::observeDeath() {
 	BotDeathResult result; const auto controlled = player.lock(); if (!controlled) { result.state = BotSurvivalState::Dead; return result; }
 	result.observation = { 0, controlled->getPosition(), controlled->getHealth(), controlled->isRemoved() || controlled->getHealth() <= 0 };
 	if (!result.observation.authoritativeDead) { result.state = survivalProgress.state; return result; }
-	survivalProgress.state = BotSurvivalState::DeathDetected; cancelCombat(); result.combatCancelled = true; (void)cancelRoute(); (void)cancelTransition(); (void)cancelLoot(); result.movementCancelled = true; survivalProgress = { .state = BotSurvivalState::Dead, .death = result.observation }; result.state = BotSurvivalState::Dead; return result;
+	survivalProgress.state = BotSurvivalState::DeathDetected; cancelCombat(); result.combatCancelled = true; (void)cancelRoute(); (void)cancelTransition(); (void)cancelLoot(); adventureProgress = BotAdventure::advance(adventureProgress, { .revision=std::max<uint64_t>(adventureProgress.lastObservationRevision+1,1),.position=controlled->getPosition(),.dead=true }, std::chrono::milliseconds(0)); result.movementCancelled = true; survivalProgress = { .state = BotSurvivalState::Dead, .death = result.observation }; result.state = BotSurvivalState::Dead; return result;
 }
 
 void BotController::cancelSurvival() { if (survivalProgress.state != BotSurvivalState::Dead) survivalProgress = { .state = BotSurvivalState::Cancelled }; }
@@ -162,6 +162,18 @@ BotSupplyAssessment BotController::evaluateSupplies(const BotSupplyPolicy &polic
 	}
 	return BotSupply::assess(BotSupply::observe(controlled, policy), policy, expectedInventorySignature);
 }
+
+BotAdventureProgress BotController::advanceAdventure(const BotAdventureObservation &observation, std::chrono::milliseconds now, const BotAdventurePolicy &policy) {
+	const auto controlled = player.lock();
+	if (!controlled || controlled->isRemoved() || controlled->getHealth() <= 0) {
+		adventureProgress = BotAdventure::advance(adventureProgress, { .revision=std::max<uint64_t>(observation.revision,1),.dead=true }, now, policy);
+		return adventureProgress;
+	}
+	adventureProgress = BotAdventure::advance(adventureProgress, observation, now, policy);
+	return adventureProgress;
+}
+
+BotAdventureProgress BotController::cancelAdventure() { adventureProgress = BotAdventure::cancel(adventureProgress); return adventureProgress; }
 
 BotActionResult BotController::tick(std::chrono::milliseconds now) {
 	lastTickWork = 0;
