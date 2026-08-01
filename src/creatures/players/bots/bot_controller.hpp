@@ -57,6 +57,9 @@ public:
 	void cancelSurvival();
 	[[nodiscard]] const BotSurvivalProgress &getSurvivalProgress() const { return survivalProgress; }
 	[[nodiscard]] BotLootSelectionResult evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature = {}, const BotLootPolicy &policy = {});
+	[[nodiscard]] BotLootTransferResult executeLoot(const BotLootTransferRequest &, std::chrono::milliseconds now, const BotLootPolicy & = {}, const BotLootTransferPolicy & = {});
+	[[nodiscard]] BotLootExecutionProgress cancelLoot();
+	[[nodiscard]] const BotLootExecutionProgress &getLootProgress() const { return lootProgress; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -78,4 +81,5 @@ private:
 	BotTargetLock combatLock;
 	BotAttackExecutionState attackExecution;
 	BotSurvivalProgress survivalProgress;
+	BotLootExecutionProgress lootProgress;
 };

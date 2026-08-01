@@ -51,6 +51,7 @@ public:
 	[[nodiscard]] BotFleeResult executeFlee(const std::string &, std::chrono::milliseconds, const BotSurvivalPolicy & = {});
 	[[nodiscard]] BotDeathResult observeDeath(const std::string &);
 	[[nodiscard]] BotLootSelectionResult evaluateLoot(const std::string &, const Position &, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature = {}, const BotLootPolicy &policy = {});
+	[[nodiscard]] BotLootTransferResult executeLoot(const std::string &, const BotLootTransferRequest &, std::chrono::milliseconds, const BotLootPolicy & = {}, const BotLootTransferPolicy & = {});
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

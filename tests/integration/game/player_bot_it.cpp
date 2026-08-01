@@ -1441,3 +1441,27 @@ TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerCorpseOpeningRemainsUnchange
 	EXPECT_EQ(ManagedPlayerRemovalResult::Complete, g_game().removeManagedPlayer(player, true, noSave));
 	ASSERT_TRUE(fixture.cleanup());
 }
+
+TEST(PlayerBotIntegrationTest, LootTransferOpensRealCorpseAndMovesStackThroughOrdinaryPlayerPath) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position corpsePosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	for (int x=0;x<=1;++x) for(int y=-1;y<=1;++y) createWalkableTile(Position(fixture.start.x+x,fixture.start.y+y,fixture.start.z));
+	BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());auto backpack=Item::CreateItem(ITEM_BACKPACK);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(std::static_pointer_cast<Cylinder>(player),backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT));
+	auto corpse=Item::CreateItem(3994);ASSERT_NE(nullptr,corpse->getContainer());corpse->setAttribute(ItemAttribute_t::CORPSEOWNER,player->getID());ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(g_game().map.getTile(corpsePosition),corpse,INDEX_WHEREEVER,FLAG_NOLIMIT));corpse->startDecaying();
+	auto gold=Item::CreateItem(3031,30);corpse->getContainer()->internalAddThing(gold);
+	BotLootPolicy policy{.rules={{{.itemTypeId=3031,.valueCategory=2,.priority=10}}}};const auto selected=manager.evaluateLoot(fixture.name,corpsePosition,77,{},policy);ASSERT_EQ(BotLootEligibility::Eligible,selected.eligibility);ASSERT_TRUE(selected.selected);
+	const auto before=std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031);BotLootTransferRequest request{.corpsePosition=corpsePosition,.sourceCreatureId=77,.corpseSignature=selected.corpse.signature,.itemTypeId=3031,.itemSignature=selected.selected->item.signature,.count=30};
+	const auto pending=manager.executeLoot(fixture.name,request,std::chrono::milliseconds(0),policy);
+	EXPECT_EQ(BotLootTransferOutcome::Pending,pending.outcome);EXPECT_TRUE(pending.ordinaryOpenAccepted);EXPECT_TRUE(pending.ordinaryMoveDispatched);EXPECT_GE(player->getContainerID(corpse->getContainer()),0);
+	player->setNextAction(0);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalMoveItem(corpse->getContainer(),std::static_pointer_cast<Cylinder>(player),INDEX_WHEREEVER,gold,30,nullptr,0,player));
+	const auto result=manager.executeLoot(fixture.name,request,std::chrono::milliseconds(1),policy);EXPECT_EQ(BotLootTransferOutcome::Succeeded,result.outcome);EXPECT_EQ(30U,result.movedCount);EXPECT_EQ(0U,corpse->getContainer()->getItemTypeCount(3031));EXPECT_EQ(before+30,std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031));
+	EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalRemoveItem(corpse));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, LootTransferPreservesRealRightsDenialWithoutMutation) {
+	PlayerBotDatabaseFixture fixture(g_database());const Position corpsePosition(fixture.start.x+1,fixture.start.y,fixture.start.z);createWalkableTile(fixture.start);createWalkableTile(corpsePosition);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());auto corpse=Item::CreateItem(3994);corpse->setAttribute(ItemAttribute_t::CORPSEOWNER,player->getID()+1000);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(g_game().map.getTile(corpsePosition),corpse,INDEX_WHEREEVER,FLAG_NOLIMIT));corpse->startDecaying();auto gold=Item::CreateItem(3031,5);corpse->getContainer()->internalAddThing(gold);BotLootPolicy policy{.rules={{{.itemTypeId=3031,.valueCategory=1,.priority=1}}}};BotLootTransferRequest request{.corpsePosition=corpsePosition,.sourceCreatureId=8,.itemTypeId=3031,.count=5};const auto before=std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031);const auto result=manager.executeLoot(fixture.name,request,std::chrono::milliseconds(0),policy);EXPECT_EQ(BotLootTransferOutcome::NoLootRights,result.outcome);EXPECT_EQ(5U,corpse->getContainer()->getItemTypeCount(3031));EXPECT_EQ(before,std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031));EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalRemoveItem(corpse));ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, LootTransferSessionCloseClearsValueOnlyExecutionState) {
+	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);BotLootTransferRequest request{.corpsePosition=Position(fixture.start.x+20,fixture.start.y,fixture.start.z),.sourceCreatureId=9,.itemTypeId=3031,.count=1};const auto result=manager.executeLoot(fixture.name,request,std::chrono::milliseconds(0));EXPECT_NE(BotLootTransferOutcome::Succeeded,result.outcome);EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_EQ(nullptr,manager.getSession(fixture.name));ASSERT_TRUE(fixture.cleanup());
+}

@@ -199,3 +199,59 @@ BotLootSelectionResult BotLoot::observe(const std::shared_ptr<Player> &player, c
 	}
 	return select(result.corpse, player->getFreeCapacity(), policy);
 }
+
+BotInventoryObservation BotLootTransfer::observeInventory(const std::shared_ptr<Player> &player, uint8_t maxContainers, uint8_t maxDepth) {
+	BotInventoryObservation result;
+	if (!player) return result;
+	result.revision = static_cast<uint64_t>(OTSYS_TIME());
+	result.freeCapacity = player->getFreeCapacity();
+	std::vector<std::pair<std::shared_ptr<Container>, uint8_t>> pending;
+	for (uint8_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
+		const auto item = player->getInventoryItem(static_cast<Slots_t>(slot));
+		if (!item) continue;
+		BotInventorySlotObservation observed { .slot = slot, .itemTypeId = item->getID(), .count = std::max<uint16_t>(item->getItemCount(), 1), .container = item->getContainer() != nullptr };
+		observed.signature = mix(mix(mix(1469598103934665603ULL, slot), observed.itemTypeId), observed.count);
+		result.slots.push_back(observed);
+		if (const auto container = item->getContainer(); container && pending.size() < maxContainers) pending.emplace_back(container, 0);
+	}
+	for (size_t index = 0; index < pending.size() && result.containers.size() < maxContainers; ++index) {
+		const auto &[container, depth] = pending[index];
+		if (!container) continue;
+		BotContainerObservation observed { .itemTypeId = container->getID(), .capacity = static_cast<uint16_t>(std::min<uint32_t>(container->capacity(), UINT16_MAX)), .size = static_cast<uint16_t>(std::min<size_t>(container->size(), UINT16_MAX)), .depth = depth };
+		observed.signature = mix(mix(mix(1469598103934665603ULL, observed.itemTypeId), observed.capacity), observed.size);
+		result.containers.push_back(observed);
+		if (depth >= maxDepth) continue;
+		for (const auto &item : container->getItemList()) {
+			if (const auto child = item ? item->getContainer() : nullptr; child && pending.size() < maxContainers) pending.emplace_back(child, static_cast<uint8_t>(depth + 1));
+		}
+	}
+	uint64_t signature=1469598103934665603ULL;signature=mix(signature,result.freeCapacity);for(const auto &slot:result.slots)signature=mix(signature,slot.signature);for(const auto &container:result.containers)signature=mix(signature,container.signature);result.signature=signature;
+	return result;
+}
+
+BotCapacityAssessment BotLootTransfer::assessCapacity(uint32_t freeCapacity, uint32_t unitWeight, uint32_t requestedCount) {
+	BotCapacityAssessment result { .freeCapacity = freeCapacity, .requestedWeight = static_cast<uint32_t>(std::min<uint64_t>(static_cast<uint64_t>(unitWeight) * requestedCount, UINT32_MAX)) };
+	result.movableCount = unitWeight == 0 ? requestedCount : std::min<uint32_t>(requestedCount, freeCapacity / unitWeight);
+	result.sufficient = result.movableCount >= requestedCount;
+	return result;
+}
+
+std::chrono::milliseconds BotLootTransfer::retryDelay(uint8_t attempt, const BotLootTransferPolicy &policy) {
+	uint64_t multiplier = attempt <= 1 ? 1 : 1ULL << std::min<uint8_t>(attempt - 1, 20);
+	return std::min(policy.maximumBackoff, std::chrono::milliseconds(std::min<uint64_t>(static_cast<uint64_t>(policy.initialBackoff.count()) * multiplier, static_cast<uint64_t>(std::chrono::milliseconds::max().count()))));
+}
+
+bool BotLootTransfer::legalTransition(BotLootExecutionState from, BotLootExecutionState to) {
+	if (to == BotLootExecutionState::Cancelled) return from != BotLootExecutionState::Completed && from != BotLootExecutionState::Cancelled;
+	switch (from) {
+		case BotLootExecutionState::Idle: return to == BotLootExecutionState::ApproachingCorpse || to == BotLootExecutionState::OpeningCorpse || to == BotLootExecutionState::Failed;
+		case BotLootExecutionState::ApproachingCorpse: return to == BotLootExecutionState::OpeningCorpse || to == BotLootExecutionState::RetryBackoff || to == BotLootExecutionState::Failed;
+		case BotLootExecutionState::OpeningCorpse: return to == BotLootExecutionState::ObservingContents || to == BotLootExecutionState::RetryBackoff || to == BotLootExecutionState::Failed;
+		case BotLootExecutionState::ObservingContents: return to == BotLootExecutionState::SelectingItem || to == BotLootExecutionState::CorpseEmpty || to == BotLootExecutionState::Failed;
+		case BotLootExecutionState::SelectingItem: return to == BotLootExecutionState::TransferPending || to == BotLootExecutionState::CapacityBlocked || to == BotLootExecutionState::Failed;
+		case BotLootExecutionState::TransferPending: return to == BotLootExecutionState::VerifyingTransfer || to == BotLootExecutionState::RetryBackoff || to == BotLootExecutionState::Failed;
+		case BotLootExecutionState::VerifyingTransfer: return to == BotLootExecutionState::Completed || to == BotLootExecutionState::RetryBackoff || to == BotLootExecutionState::Failed;
+		case BotLootExecutionState::RetryBackoff: return to == BotLootExecutionState::OpeningCorpse || to == BotLootExecutionState::Failed;
+		default: return false;
+	}
+}

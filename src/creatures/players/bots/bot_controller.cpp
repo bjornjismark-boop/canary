@@ -20,6 +20,9 @@ BotController::BotController(Game &game, const std::shared_ptr<Player> &player, 
 
 namespace {
 uint32_t carriedCount(Game &, const std::shared_ptr<Player> &player, uint16_t id) { return player ? std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(id) : 0; }
+uint64_t lootItemSignature(uint16_t id, uint32_t count, uint16_t stack) { uint64_t h=1469598103934665603ULL;h=(h^id)*1099511628211ULL;h=(h^count)*1099511628211ULL;return (h^stack)*1099511628211ULL; }
+std::shared_ptr<Item> corpseAt(const Position &position) { const auto tile=g_game().map.getTile(position);if(!tile||!tile->getItemList())return nullptr;for(const auto &item:*tile->getItemList())if(item&&item->isCorpse()&&item->getContainer())return item;return nullptr; }
+uint32_t corpseItemCount(const std::shared_ptr<Container> &container,uint16_t id){uint64_t total=0;if(container)for(const auto &item:container->getItemList())if(item&&item->getID()==id)total=std::min<uint64_t>(UINT32_MAX,total+std::max<uint16_t>(item->getItemCount(),1));return static_cast<uint32_t>(total);}
 std::optional<std::pair<BotSurvivalObservation, BotCombatObservation>> survivalObservation(const std::shared_ptr<Player> &player) {
 	const auto base = BotPerception::observe(player); if (!base) return std::nullopt;
 	const auto combat = BotCombat::observe(player, *base); if (!combat) return std::nullopt;
@@ -97,7 +100,7 @@ BotDeathResult BotController::observeDeath() {
 	BotDeathResult result; const auto controlled = player.lock(); if (!controlled) { result.state = BotSurvivalState::Dead; return result; }
 	result.observation = { 0, controlled->getPosition(), controlled->getHealth(), controlled->isRemoved() || controlled->getHealth() <= 0 };
 	if (!result.observation.authoritativeDead) { result.state = survivalProgress.state; return result; }
-	survivalProgress.state = BotSurvivalState::DeathDetected; cancelCombat(); result.combatCancelled = true; (void)cancelRoute(); (void)cancelTransition(); result.movementCancelled = true; survivalProgress = { .state = BotSurvivalState::Dead, .death = result.observation }; result.state = BotSurvivalState::Dead; return result;
+	survivalProgress.state = BotSurvivalState::DeathDetected; cancelCombat(); result.combatCancelled = true; (void)cancelRoute(); (void)cancelTransition(); (void)cancelLoot(); result.movementCancelled = true; survivalProgress = { .state = BotSurvivalState::Dead, .death = result.observation }; result.state = BotSurvivalState::Dead; return result;
 }
 
 void BotController::cancelSurvival() { if (survivalProgress.state != BotSurvivalState::Dead) survivalProgress = { .state = BotSurvivalState::Cancelled }; }
@@ -108,6 +111,49 @@ BotLootSelectionResult BotController::evaluateLoot(const Position &position, uin
 	if (!observation) return { .eligibility = BotLootEligibility::InvalidLifecycle, .failure = BotLootFailure::InvalidLifecycle };
 	return BotLoot::observe(controlled, *observation, position, sourceCreatureId, expectedSignature, policy);
 }
+
+BotLootTransferResult BotController::executeLoot(const BotLootTransferRequest &request, std::chrono::milliseconds now, const BotLootPolicy &lootPolicy, const BotLootTransferPolicy &policy) {
+	BotLootTransferResult result { .request = request };
+	const auto controlled = player.lock();
+	if (!controlled || controlled->isRemoved() || controlled->getHealth() <= 0) { result.failure=BotLootTransferFailure::InvalidLifecycle;result.state=BotLootExecutionState::Failed;return result; }
+	if (lootProgress.state == BotLootExecutionState::Cancelled) { result.outcome=BotLootTransferOutcome::Cancelled;result.failure=BotLootTransferFailure::Cancelled;result.state=lootProgress.state;return result; }
+	if (lootProgress.state == BotLootExecutionState::Completed) { result.outcome=BotLootTransferOutcome::Succeeded;result.state=lootProgress.state;result.attempts=lootProgress.attempts;return result; }
+	if (lootProgress.state == BotLootExecutionState::Failed && lootProgress.request && *lootProgress.request==request) { result.outcome=BotLootTransferOutcome::RetryExhausted;result.failure=BotLootTransferFailure::RetryExhausted;result.state=lootProgress.state;result.attempts=lootProgress.attempts;return result; }
+	if (lootProgress.request && *lootProgress.request != request && lootProgress.state != BotLootExecutionState::Completed && lootProgress.state != BotLootExecutionState::Failed) { result.outcome=BotLootTransferOutcome::Pending;result.state=lootProgress.state;result.attempts=lootProgress.attempts;return result; }
+	if (lootProgress.state==BotLootExecutionState::ApproachingCorpse&&lootProgress.request&&*lootProgress.request==request) { const auto routeState=advanceRoute(now);if(routeState.state!=BotRouteState::Arrived){result.outcome=BotLootTransferOutcome::Pending;result.state=lootProgress.state;result.attempts=lootProgress.attempts;return result;}lootProgress.state=BotLootExecutionState::OpeningCorpse; }
+	auto verify = [&]() -> std::optional<BotLootTransferResult> {
+		if (lootProgress.state != BotLootExecutionState::TransferPending && lootProgress.state != BotLootExecutionState::VerifyingTransfer) return std::nullopt;
+		lootProgress.state=BotLootExecutionState::VerifyingTransfer;
+		const auto corpse=corpseAt(request.corpsePosition);const auto container=corpse?corpse->getContainer():nullptr;
+		const uint32_t sourceAfter=corpseItemCount(container,request.itemTypeId);const uint32_t destinationAfter=carriedCount(game,controlled,request.itemTypeId);
+		BotLootTransferResult checked { .request=request,.sourceBefore=lootProgress.sourceBefore,.sourceAfter=sourceAfter,.destinationBefore=lootProgress.destinationBefore,.destinationAfter=destinationAfter,.attempts=lootProgress.attempts,.ordinaryOpenAccepted=true,.ordinaryMoveDispatched=true };
+		const uint32_t sourceDelta=lootProgress.sourceBefore>sourceAfter?lootProgress.sourceBefore-sourceAfter:0;const uint32_t destinationDelta=destinationAfter>lootProgress.destinationBefore?destinationAfter-lootProgress.destinationBefore:0;checked.movedCount=std::min(sourceDelta,destinationDelta);
+		if (checked.movedCount>0) { lootProgress.state=BotLootExecutionState::Completed;checked.state=lootProgress.state;checked.outcome=checked.movedCount<request.count?BotLootTransferOutcome::Partial:BotLootTransferOutcome::Succeeded;return checked; }
+		if (!corpse || !container) { lootProgress.state=BotLootExecutionState::Failed;checked.state=lootProgress.state;checked.outcome=BotLootTransferOutcome::CorpseExpired;checked.failure=BotLootTransferFailure::CorpseExpired;return checked; }
+		if (now-lootProgress.startedAt>=policy.timeout) { lootProgress.state=BotLootExecutionState::Failed;checked.state=lootProgress.state;checked.outcome=BotLootTransferOutcome::NoEffect;checked.failure=BotLootTransferFailure::WorldRejected;return checked; }
+		checked.state=lootProgress.state;checked.outcome=BotLootTransferOutcome::Pending;return checked;
+	};
+	if (auto checked=verify()) return *checked;
+	const auto eligibility=evaluateLoot(request.corpsePosition,request.sourceCreatureId,request.corpseSignature,lootPolicy);
+	if (eligibility.eligibility!=BotLootEligibility::Eligible) { result.state=BotLootExecutionState::Failed;lootProgress={.state=BotLootExecutionState::Failed};switch(eligibility.eligibility){case BotLootEligibility::NoLootRights:result.outcome=BotLootTransferOutcome::NoLootRights;result.failure=BotLootTransferFailure::NoLootRights;break;case BotLootEligibility::StaleObservation:result.outcome=BotLootTransferOutcome::StaleCorpse;result.failure=BotLootTransferFailure::StaleCorpse;break;case BotLootEligibility::CorpseExpired:result.outcome=BotLootTransferOutcome::CorpseExpired;result.failure=BotLootTransferFailure::CorpseExpired;break;case BotLootEligibility::CapacityInsufficient:result.outcome=BotLootTransferOutcome::CapacityInsufficient;result.failure=BotLootTransferFailure::CapacityInsufficient;break;default:result.outcome=BotLootTransferOutcome::WorldRejected;result.failure=BotLootTransferFailure::WorldRejected;}return result; }
+	if (!eligibility.selected || request.count==0 || eligibility.selected->item.itemTypeId!=request.itemTypeId || (request.itemSignature&&eligibility.selected->item.signature!=request.itemSignature)) { lootProgress={.state=BotLootExecutionState::Failed};result.state=lootProgress.state;result.outcome=BotLootTransferOutcome::StaleItem;result.failure=BotLootTransferFailure::StaleItem;return result; }
+	const auto inventory=BotLootTransfer::observeInventory(controlled,policy.maxInventoryContainers,policy.maxInventoryDepth);if(request.destinationSignature&&request.destinationSignature!=inventory.signature){lootProgress={.state=BotLootExecutionState::Failed};result.state=lootProgress.state;result.outcome=BotLootTransferOutcome::StaleDestination;result.failure=BotLootTransferFailure::StaleDestination;return result;}
+	if (std::max(Position::getDistanceX(controlled->getPosition(),request.corpsePosition),Position::getDistanceY(controlled->getPosition(),request.corpsePosition))>1) { lootProgress={.state=BotLootExecutionState::ApproachingCorpse,.request=request,.attempts=1,.startedAt=now};(void)startRoute(request.corpsePosition,now,{.maxExpandedNodes=128,.maxRouteLength=lootPolicy.maxDistance,.maxPlanningOperations=2048});result.state=lootProgress.state;result.outcome=BotLootTransferOutcome::Pending;return result; }
+	const auto corpse=corpseAt(request.corpsePosition);if(!corpse||!corpse->getContainer()){result.outcome=BotLootTransferOutcome::CorpseExpired;result.failure=BotLootTransferFailure::CorpseExpired;result.state=BotLootExecutionState::Failed;return result;}
+	lootProgress={.state=BotLootExecutionState::OpeningCorpse,.request=request,.attempts=1,.startedAt=now};
+	const bool alreadyOpen=controlled->getContainerID(corpse->getContainer())>=0;
+	if(!alreadyOpen&&!g_actions().useItem(controlled,request.corpsePosition,0,corpse,false)){lootProgress.state=BotLootExecutionState::Failed;result.outcome=BotLootTransferOutcome::WorldRejected;result.failure=BotLootTransferFailure::WorldRejected;result.state=lootProgress.state;return result;}
+	result.ordinaryOpenAccepted=true;
+	if(controlled->getContainerID(corpse->getContainer())<0){result.outcome=BotLootTransferOutcome::Pending;result.state=lootProgress.state;return result;}
+	lootProgress.state=BotLootExecutionState::ObservingContents;
+	std::shared_ptr<Item> selected;uint16_t selectedStack=0;for(size_t i=0;i<corpse->getContainer()->getItemList().size();++i){const auto &item=corpse->getContainer()->getItemList()[i];if(item&&item->getID()==request.itemTypeId&&(!request.itemSignature||lootItemSignature(item->getID(),std::max<uint16_t>(item->getItemCount(),1),static_cast<uint16_t>(i))==request.itemSignature)){selected=item;selectedStack=static_cast<uint16_t>(i);break;}}
+	if(!selected){lootProgress.state=BotLootExecutionState::Failed;result.outcome=BotLootTransferOutcome::ItemGone;result.failure=BotLootTransferFailure::ItemGone;result.state=lootProgress.state;return result;}
+	lootProgress.state=BotLootExecutionState::SelectingItem;const uint32_t available=std::max<uint16_t>(selected->getItemCount(),1);const uint32_t wanted=std::min(request.count,available);const uint32_t unitWeight=available?selected->getWeight()/available:selected->getWeight();const auto capacity=BotLootTransfer::assessCapacity(controlled->getFreeCapacity(),unitWeight,wanted);if(capacity.movableCount==0){lootProgress.state=BotLootExecutionState::CapacityBlocked;result.outcome=BotLootTransferOutcome::CapacityInsufficient;result.failure=BotLootTransferFailure::CapacityInsufficient;result.state=lootProgress.state;return result;}uint32_t maxDestinationCount=0;const auto destinationQuery=std::static_pointer_cast<Cylinder>(controlled)->queryMaxCount(INDEX_WHEREEVER,selected,capacity.movableCount,maxDestinationCount,0);if(destinationQuery!=RETURNVALUE_NOERROR&&maxDestinationCount==0){lootProgress.state=BotLootExecutionState::CapacityBlocked;result.outcome=BotLootTransferOutcome::DestinationFull;result.failure=BotLootTransferFailure::DestinationFull;result.state=lootProgress.state;return result;}const uint32_t dispatchCount=std::min(capacity.movableCount,maxDestinationCount);
+	lootProgress.state=BotLootExecutionState::TransferPending;lootProgress.sourceBefore=corpseItemCount(corpse->getContainer(),request.itemTypeId);lootProgress.destinationBefore=carriedCount(game,controlled,request.itemTypeId);Position from;uint8_t stack=static_cast<uint8_t>(selectedStack);Game::internalGetPosition(selected,from,stack);const Position to(0xFFFF,CONST_SLOT_WHEREEVER,0);game.playerMoveItem(controlled,from,selected->getID(),stack,to,static_cast<uint8_t>(std::min<uint32_t>(dispatchCount,UINT8_MAX)),selected,std::static_pointer_cast<Cylinder>(controlled));result.ordinaryMoveDispatched=true;
+	if(auto checked=verify())return *checked;result.outcome=BotLootTransferOutcome::Pending;result.state=lootProgress.state;return result;
+}
+
+BotLootExecutionProgress BotController::cancelLoot() { if(lootProgress.state!=BotLootExecutionState::Completed)lootProgress={.state=BotLootExecutionState::Cancelled};return lootProgress; }
 
 BotActionResult BotController::tick(std::chrono::milliseconds now) {
 	lastTickWork = 0;

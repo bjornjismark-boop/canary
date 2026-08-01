@@ -199,6 +199,7 @@ BotHealingResult BotSession::executeHealing(const BotHealingOption &o, std::chro
 BotFleeResult BotSession::executeFlee(std::chrono::milliseconds n, const BotSurvivalPolicy &p) { if (state != BotSessionState::Placed || !controller) return { .outcome = BotFleeOutcome::Cancelled }; return controller->executeFlee(n, p); }
 BotDeathResult BotSession::observeDeath() { if (!controller) return { .state = BotSurvivalState::Dead }; return controller->observeDeath(); }
 BotLootSelectionResult BotSession::evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature, const BotLootPolicy &policy) { if (state != BotSessionState::Placed || !controller) return { .eligibility = BotLootEligibility::InvalidLifecycle, .failure = BotLootFailure::InvalidLifecycle }; return controller->evaluateLoot(position, sourceCreatureId, expectedSignature, policy); }
+BotLootTransferResult BotSession::executeLoot(const BotLootTransferRequest &r, std::chrono::milliseconds n, const BotLootPolicy &p, const BotLootTransferPolicy &t) { if(state!=BotSessionState::Placed||!controller)return{.outcome=BotLootTransferOutcome::Cancelled,.failure=BotLootTransferFailure::InvalidLifecycle,.state=BotLootExecutionState::Failed,.request=r};return controller->executeLoot(r,n,p,t); }
 
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
@@ -273,7 +274,7 @@ bool BotSession::retryPendingSave() {
 }
 
 void BotSession::finishClose() {
-	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); controller->cancelCombat(); controller->cancelSurvival(); }
+	if (controller) { (void)controller->cancelRoute(); (void)controller->cancelTransition(); controller->cancelCombat(); controller->cancelSurvival(); (void)controller->cancelLoot(); }
 	controller.reset();
 	player.reset();
 	state = BotSessionState::Closed;

@@ -90,3 +90,97 @@ public:
 	static BotLootSelectionResult select(const BotCorpseObservation &corpse, uint32_t freeCapacity, const BotLootPolicy &policy = {});
 	static BotCorpseSignature signature(const BotCorpseObservation &corpse);
 };
+
+enum class BotLootExecutionState : uint8_t { Idle, ApproachingCorpse, OpeningCorpse, ObservingContents, SelectingItem, TransferPending, VerifyingTransfer, CorpseEmpty, CapacityBlocked, Completed, RetryBackoff, Failed, Cancelled };
+enum class BotLootTransferOutcome : uint8_t { Succeeded, Partial, Pending, NoEffect, CorpseOpened, AlreadyOpen, CapacityInsufficient, DestinationFull, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryScheduled, RetryExhausted, Cancelled };
+enum class BotLootTransferFailure : uint8_t { None, InvalidLifecycle, CapacityInsufficient, DestinationFull, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryExhausted, Cancelled };
+
+struct BotInventorySlotObservation {
+	uint8_t slot = 0;
+	uint16_t itemTypeId = 0;
+	uint32_t count = 0;
+	bool container = false;
+	uint64_t signature = 0;
+	auto operator<=>(const BotInventorySlotObservation &) const = default;
+};
+
+struct BotContainerObservation {
+	uint16_t itemTypeId = 0;
+	uint16_t capacity = 0;
+	uint16_t size = 0;
+	uint8_t depth = 0;
+	uint64_t signature = 0;
+	auto operator<=>(const BotContainerObservation &) const = default;
+};
+
+struct BotInventoryObservation {
+	uint64_t revision = 0;
+	uint64_t signature = 0;
+	uint32_t freeCapacity = 0;
+	std::vector<BotInventorySlotObservation> slots;
+	std::vector<BotContainerObservation> containers;
+	bool containsWorldOwnership = false;
+	auto operator<=>(const BotInventoryObservation &) const = default;
+};
+
+struct BotCapacityAssessment {
+	uint32_t freeCapacity = 0;
+	uint32_t requestedWeight = 0;
+	uint32_t movableCount = 0;
+	bool sufficient = false;
+	auto operator<=>(const BotCapacityAssessment &) const = default;
+};
+
+struct BotLootTransferRequest {
+	Position corpsePosition;
+	uint32_t sourceCreatureId = 0;
+	BotCorpseSignature corpseSignature;
+	uint16_t itemTypeId = 0;
+	uint64_t itemSignature = 0;
+	uint32_t count = 0;
+	uint64_t destinationSignature = 0;
+	auto operator<=>(const BotLootTransferRequest &) const = default;
+};
+
+struct BotLootTransferPolicy {
+	uint8_t maxAttempts = 1;
+	uint8_t maxInventoryContainers = 16;
+	uint8_t maxInventoryDepth = 2;
+	std::chrono::milliseconds timeout { 2000 };
+	std::chrono::milliseconds initialBackoff { 200 };
+	std::chrono::milliseconds maximumBackoff { 1600 };
+};
+
+struct BotLootTransferResult {
+	BotLootTransferOutcome outcome = BotLootTransferOutcome::WorldRejected;
+	BotLootTransferFailure failure = BotLootTransferFailure::None;
+	BotLootExecutionState state = BotLootExecutionState::Idle;
+	BotLootTransferRequest request;
+	uint32_t sourceBefore = 0;
+	uint32_t sourceAfter = 0;
+	uint32_t destinationBefore = 0;
+	uint32_t destinationAfter = 0;
+	uint32_t movedCount = 0;
+	uint8_t attempts = 0;
+	bool ordinaryOpenAccepted = false;
+	bool ordinaryMoveDispatched = false;
+};
+
+struct BotLootExecutionProgress {
+	BotLootExecutionState state = BotLootExecutionState::Idle;
+	std::optional<BotLootTransferRequest> request;
+	uint32_t sourceBefore = 0;
+	uint32_t destinationBefore = 0;
+	uint8_t attempts = 0;
+	std::chrono::milliseconds startedAt { 0 };
+	std::chrono::milliseconds nextAttemptAt { 0 };
+	bool containsWorldOwnership = false;
+};
+
+class BotLootTransfer final {
+public:
+	static BotInventoryObservation observeInventory(const std::shared_ptr<Player> &player, uint8_t maxContainers = 16, uint8_t maxDepth = 2);
+	static BotCapacityAssessment assessCapacity(uint32_t freeCapacity, uint32_t unitWeight, uint32_t requestedCount);
+	static std::chrono::milliseconds retryDelay(uint8_t attempt, const BotLootTransferPolicy &policy);
+	static bool legalTransition(BotLootExecutionState from, BotLootExecutionState to);
+};
