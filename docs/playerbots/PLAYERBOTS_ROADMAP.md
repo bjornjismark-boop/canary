@@ -615,9 +615,12 @@ dispatcher-owned fleet reconciliation path; critical pressure blocks new bot
 logins, reduces optional work and recovers with hysteresis, while save/logout
 safety remains enabled. A standalone bounded deterministic soak executable
 requires an explicitly disposable test environment and emits an atomic terminal
-report labeled `PRODUCTION_SOAK=NO`. Current focused evidence is 22 unit and two
-database/world integration tests, including three reconstruction cycles and
-pressure recovery. Full M9 remains open: the roadmap-required long mixed
+report labeled `PRODUCTION_SOAK=NO`. Current focused evidence includes 23 unit
+and four database/world integration tests, including three reconstruction
+cycles, pressure recovery, database-load admission failure with bounded backoff,
+failed placement cleanup/recovery and an authenticated admin-request timeout
+that cannot enqueue a write. The complete gate is build 0, unit 671/671,
+integration 114/114 and diff 0. Full M9 remains open: the roadmap-required long mixed
 human/bot production soak with actual stable session, memory and tick-latency
 evidence has not been executed, and the complete requested fault campaign is
 not yet proven.
