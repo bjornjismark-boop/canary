@@ -20,6 +20,7 @@
 #include "creatures/players/bots/bot_quest.hpp"
 #include "creatures/players/bots/bot_quest_execution.hpp"
 #include "creatures/players/bots/bot_planner.hpp"
+#include "creatures/players/bots/bot_plan_execution.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -855,3 +856,41 @@ TEST(PlayerBotPlannerTest,TransientRuntimeStateDoesNotPersist){EXPECT_FALSE(BotP
 TEST(PlayerBotPlannerTest,CancellationIsTerminal){auto d=BotPlanner::select(plannerGoals(),plannerObservation());d.status=BotGoalStatus::Cancelled;EXPECT_EQ(d,BotPlanner::verifyStep(d,0,2,true));}
 TEST(PlayerBotPlannerTest,PriorityArithmeticCannotOverflow){BotGoal g{.id=1,.type=BotGoalType::Recover,.priority=BotGoalPriority::DeathRecovery,.status=BotGoalStatus::Eligible};auto o=plannerObservation();o.dead=true;EXPECT_LT(BotPlanner::score(g,o),UINT16_MAX);}
 TEST(PlayerBotPlannerTest,IdenticalObservationsYieldIdenticalDecisions){EXPECT_EQ(BotPlanner::select(plannerGoals(),plannerObservation()),BotPlanner::select(plannerGoals(),plannerObservation()));}
+
+namespace {
+BotPlanExecutionObservation executionObservation(uint64_t revision=1){return{.revision=revision,.sessionGeneration=7,.placed=true};}
+BotPlanExecution executionFixture(){auto o=plannerObservation();o.sessionGeneration=7;auto decision=BotPlanner::select({plannerGoals()[7]},o);return BotPlanExecutor::start(42,decision,executionObservation());}
+BotPlanExecution delegatedExecution(){auto e=executionFixture();return BotPlanExecutor::delegate(std::move(e),executionObservation(2));}
+}
+TEST(PlayerBotPlanExecutionTest,ExecutionStateContainsValuesOnly){EXPECT_FALSE(executionFixture().containsWorldOwnership());}
+TEST(PlayerBotPlanExecutionTest,NoSubsystemOrWorldOwnershipIsRetained){EXPECT_EQ(BotPlanStepIntent{},BotPlanStepIntent{});EXPECT_FALSE(BotPlanExecution{}.containsWorldOwnership());}
+TEST(PlayerBotPlanExecutionTest,OneHighLevelPlanInvariant){auto e=executionFixture();EXPECT_EQ(42,e.id);EXPECT_EQ(BotPlanExecutionState::PlanSelected,e.state);}
+TEST(PlayerBotPlanExecutionTest,OneDelegatedStepInvariant){auto e=delegatedExecution();auto again=BotPlanExecutor::delegate(e,executionObservation(3));EXPECT_EQ(BotPlanFailure::ConflictingIntent,again.failure);EXPECT_EQ(e.delegatedStep,again.delegatedStep);}
+TEST(PlayerBotPlanExecutionTest,DeathOverridesEveryPlan){auto e=executionFixture();auto o=executionObservation(2);o.dead=true;EXPECT_EQ(BotPlanExecutionState::Dead,BotPlanExecutor::delegate(e,o).state);}
+TEST(PlayerBotPlanExecutionTest,SurvivalOverridesTravel){auto e=executionFixture();auto o=executionObservation(2);o.survivalCritical=true;EXPECT_EQ(BotPlanExecutionState::Suspended,BotPlanExecutor::delegate(e,o).state);}
+TEST(PlayerBotPlanExecutionTest,SurvivalOverridesCombatContinuation){auto e=delegatedExecution();auto o=executionObservation(3);o.survivalCritical=true;EXPECT_EQ(BotPlanArbitrationReason::CriticalSurvival,BotPlanExecutor::arbitrate(e,o).reason);}
+TEST(PlayerBotPlanExecutionTest,SurvivalSafelySuspendsLoot){auto e=executionFixture();auto o=executionObservation(2);o.survivalCritical=true;o.pendingAuthoritativeAction=true;auto a=BotPlanExecutor::arbitrate(e,o);EXPECT_TRUE(a.suspend);EXPECT_TRUE(a.requiresBoundary);}
+TEST(PlayerBotPlanExecutionTest,PendingAuthoritativeActionReachesSafeBoundary){auto e=executionFixture();auto o=executionObservation(2);o.pendingAuthoritativeAction=true;EXPECT_TRUE(BotPlanExecutor::arbitrate(e,o).requiresBoundary);}
+TEST(PlayerBotPlanExecutionTest,SessionShutdownOverridesOptionalWork){auto e=executionFixture();auto o=executionObservation(2);o.shutdownRequested=true;EXPECT_EQ(BotPlanExecutionState::Cancelled,BotPlanExecutor::delegate(e,o).state);}
+TEST(PlayerBotPlanExecutionTest,AcceptedRequestDoesNotAdvanceCheckpoint){auto e=delegatedExecution();e.delegatedStep->accepted=true;EXPECT_EQ(0,e.decision.checkpoint.verifiedStepIndex);}
+TEST(PlayerBotPlanExecutionTest,ObservedTerminalSuccessAdvancesCheckpoint){auto e=BotPlanExecutor::observe(delegatedExecution(),BotPlanStepOutcome::Succeeded,3,true);EXPECT_EQ(1,e.decision.checkpoint.verifiedStepIndex);}
+TEST(PlayerBotPlanExecutionTest,NoEffectDoesNotAdvance){auto e=BotPlanExecutor::observe(delegatedExecution(),BotPlanStepOutcome::NoEffect,3,false);EXPECT_EQ(0,e.decision.checkpoint.verifiedStepIndex);}
+TEST(PlayerBotPlanExecutionTest,PartialOutcomeIsExplicit){auto e=BotPlanExecutor::observe(delegatedExecution(),BotPlanStepOutcome::Partial,3,false);EXPECT_EQ(BotPlanFailure::TargetUnavailable,e.failure);}
+TEST(PlayerBotPlanExecutionTest,UnexpectedStateCausesReobservation){auto e=BotPlanExecutor::observe(delegatedExecution(),BotPlanStepOutcome::UnexpectedState,3,false);EXPECT_TRUE(e.freshObservationRequired);}
+TEST(PlayerBotPlanExecutionTest,LostPreconditionCausesReplan){auto e=BotPlanExecutor::observe(delegatedExecution(),BotPlanStepOutcome::PreconditionLost,3,false);EXPECT_EQ(BotPlanFailure::StaleCheckpoint,e.failure);}
+TEST(PlayerBotPlanExecutionTest,RouteFailureChoosesBoundedAlternative){auto e=executionFixture();e.budget.maximumRetries=0;EXPECT_EQ(BotPlanRecoveryDecision::ChooseAlternative,BotPlanExecutor::recover(e,BotPlanFailure::RouteUnavailable,1).recovery);}
+TEST(PlayerBotPlanExecutionTest,UnavailableNpcChoosesBoundedAlternative){auto e=executionFixture();e.budget.maximumRetries=0;EXPECT_EQ(BotPlanRecoveryDecision::ChooseAlternative,BotPlanExecutor::recover(e,BotPlanFailure::NpcUnavailable,9).recovery);}
+TEST(PlayerBotPlanExecutionTest,SupplyDepletionReplacesProgression){auto e=executionFixture();auto o=executionObservation(2);o.supplyUrgent=true;EXPECT_TRUE(BotPlanExecutor::arbitrate(e,o).suspend);}
+TEST(PlayerBotPlanExecutionTest,QuestStateChangeTriggersReplan){auto e=BotPlanExecutor::recover(executionFixture(),BotPlanFailure::QuestStateChanged);EXPECT_TRUE(e.freshObservationRequired);}
+TEST(PlayerBotPlanExecutionTest,StaleCheckpointIsRejected){auto e=BotPlanExecutor::delegate(executionFixture(),executionObservation(1));EXPECT_EQ(BotPlanFailure::StaleCheckpoint,e.failure);}
+TEST(PlayerBotPlanExecutionTest,ExecutionBudgetIsEnforced){auto e=executionFixture();e.budget.maximumTicks=0;EXPECT_EQ(BotPlanExecutionState::Failed,BotPlanExecutor::delegate(e,executionObservation(2)).state);}
+TEST(PlayerBotPlanExecutionTest,RetryCountIsFinite){auto e=executionFixture();e.budget.maximumRetries=1;e=BotPlanExecutor::recover(e,BotPlanFailure::Timeout,2);e=BotPlanExecutor::recover(e,BotPlanFailure::Timeout,2);EXPECT_NE(BotPlanRecoveryDecision::RetryStep,e.recovery);}
+TEST(PlayerBotPlanExecutionTest,AlternativeCountIsFinite){auto e=executionFixture();e.budget.maximumRetries=0;e.budget.maximumAlternatives=1;e=BotPlanExecutor::recover(e,BotPlanFailure::NpcUnavailable,2);e=BotPlanExecutor::recover(e,BotPlanFailure::NpcUnavailable,2);EXPECT_EQ(BotPlanRecoveryDecision::ReplacePlan,e.recovery);}
+TEST(PlayerBotPlanExecutionTest,PlanOscillationIsSuppressed){auto e=executionFixture();e.budget.maximumRetries=0;e.budget.maximumAlternatives=0;EXPECT_EQ(BotPlanRecoveryDecision::ReplacePlan,BotPlanExecutor::recover(e,BotPlanFailure::RouteUnavailable,7).recovery);}
+TEST(PlayerBotPlanExecutionTest,EqualPriorityDecisionsAreDeterministic){auto e=executionFixture();auto o=executionObservation(2);EXPECT_EQ(BotPlanExecutor::arbitrate(e,o),BotPlanExecutor::arbitrate(e,o));}
+TEST(PlayerBotPlanExecutionTest,CompletedPlanIsTerminal){auto e=executionFixture();e.state=BotPlanExecutionState::Completed;EXPECT_TRUE(e.terminal());}
+TEST(PlayerBotPlanExecutionTest,FailedPlanIsTerminalAfterExhaustion){auto e=executionFixture();e.budget.maximumRecoveries=0;e=BotPlanExecutor::recover(e,BotPlanFailure::RetryExhausted);EXPECT_TRUE(e.terminal());}
+TEST(PlayerBotPlanExecutionTest,CancellationIsTerminal){EXPECT_TRUE(BotPlanExecutor::cancel(executionFixture()).terminal());}
+TEST(PlayerBotPlanExecutionTest,SessionCloseClearsExecutionState){auto e=BotPlanExecutor::cancel(delegatedExecution());EXPECT_FALSE(e.delegatedStep);}
+TEST(PlayerBotPlanExecutionTest,NoCallbacksRetainSession){EXPECT_FALSE(BotPlanExecution{}.containsWorldOwnership());}
+TEST(PlayerBotPlanExecutionTest,IdenticalObservationsProduceIdenticalArbitration){auto e=executionFixture();EXPECT_EQ(BotPlanExecutor::arbitrate(e,executionObservation()),BotPlanExecutor::arbitrate(e,executionObservation()));}

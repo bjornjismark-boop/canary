@@ -11,6 +11,7 @@
 #include "creatures/players/bots/bot_resupply.hpp"
 #include "creatures/players/bots/bot_quest_execution.hpp"
 #include "creatures/players/bots/bot_planner.hpp"
+#include "creatures/players/bots/bot_plan_execution.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
 #include "creatures/players/player.hpp"
@@ -2069,4 +2070,36 @@ TEST(PlayerBotIntegrationTest, LongHorizonPlannerReconstructsOnlyVerifiedSafeChe
 	auto invalidObservation = rebuilt; invalidObservation.revision = 4; invalidObservation.checkpointValid = false; const auto invalid = BotPlanner::reconstruct(decision, invalidObservation); EXPECT_EQ(BotPlannerFailure::CheckpointInvalid, invalid.failure);
 	const auto replanned = BotPlanner::replan(goals, invalidObservation, invalid, BotReplanReason::CheckpointInvalid); EXPECT_EQ(BotReplanReason::CheckpointInvalid, replanned.replanReason); EXPECT_EQ(0, replanned.checkpoint.verifiedStepIndex);
 	EXPECT_FALSE(resumed.containsWorldOwnership()); EXPECT_TRUE(manager.logout(fixture.name, false)); ASSERT_TRUE(fixture.cleanup()); EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, PlanExecutionDelegatesRealTravelAndWaitsForAuthoritativeCompletion) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	for (int x = 0; x <= 2; ++x) createWalkableTile(Position(fixture.start.x + x, fixture.start.y, fixture.start.z));
+	BotManager manager(g_game()); const auto session = loginBotOrReport(manager, fixture.name); ASSERT_NE(nullptr, session);
+	const Position destination(fixture.start.x + 2, fixture.start.y, fixture.start.z);
+	BotGoal goal { .id = 90, .type = BotGoalType::ReturnHomeRegion, .priority = BotGoalPriority::Progression, .status = BotGoalStatus::Eligible, .policyRevision = 1, .configuredRegion = destination };
+	BotPlannerObservation plannerObservation { .revision = 1, .sessionGeneration = 7, .progressionConfigured = true };
+	auto decision = BotPlanner::select({ goal }, plannerObservation); ASSERT_EQ(BotPlanStepType::Observe, decision.plan.steps.front().type);
+	auto execution = BotPlanExecutor::start(500, decision, { .revision = 1, .sessionGeneration = 7, .placed = true });
+	execution = BotPlanExecutor::delegate(execution, { .revision = 2, .sessionGeneration = 7, .placed = true }); ASSERT_TRUE(execution.delegatedStep);
+	execution.delegatedStep->accepted = true; EXPECT_EQ(0, execution.decision.checkpoint.verifiedStepIndex);
+	execution = BotPlanExecutor::observe(execution, BotPlanStepOutcome::Succeeded, 3, true); ASSERT_EQ(1, execution.decision.checkpoint.verifiedStepIndex);
+	execution.freshObservationRequired = false;
+	execution = BotPlanExecutor::delegate(execution, { .revision = 4, .sessionGeneration = 7, .placed = true }); ASSERT_EQ(BotPlanSubsystem::Navigation, execution.delegatedStep->intent.subsystem);
+	auto route = manager.startRoute(fixture.name, destination, std::chrono::milliseconds(1)); for (uint8_t i=0;i<8&&route.state!=BotRouteState::Arrived;++i) route=manager.advanceRoute(fixture.name,std::chrono::milliseconds(100+i*100)); ASSERT_EQ(BotRouteState::Arrived,route.state);
+	execution = BotPlanExecutor::observe(execution, BotPlanStepOutcome::Succeeded, 5, true); EXPECT_EQ(2,execution.decision.checkpoint.verifiedStepIndex); EXPECT_FALSE(execution.containsWorldOwnership());
+	EXPECT_TRUE(manager.logout(fixture.name,false)); ASSERT_TRUE(fixture.cleanup()); EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, PlanExecutionArbitratesRecoveryDeathAndSessionCloseWithoutMutation) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game());
+	const auto session=loginBotOrReport(manager,fixture.name); ASSERT_NE(nullptr,session); const auto player=std::const_pointer_cast<Player>(session->getPlayer());
+	const auto experienceBefore=player->getExperience(); const auto storageBefore=player->getStorageValue(900100);
+	BotGoal goal{.id=91,.type=BotGoalType::IdleSafely,.status=BotGoalStatus::Eligible,.policyRevision=1}; BotPlannerObservation po{.revision=1,.sessionGeneration=8};
+	auto execution=BotPlanExecutor::start(501,BotPlanner::select({goal},po),{.revision=1,.sessionGeneration=8,.placed=true});
+	auto pending=BotPlanExecutor::arbitrate(execution,{.revision=2,.sessionGeneration=8,.placed=true,.pendingAuthoritativeAction=true,.shutdownRequested=true}); EXPECT_EQ(BotPlanArbitrationReason::PendingBoundary,pending.reason);
+	auto recovered=BotPlanExecutor::recover(execution,BotPlanFailure::RouteUnavailable,77); EXPECT_EQ(BotPlanRecoveryDecision::RetryStep,recovered.recovery);
+	auto survival=BotPlanExecutor::arbitrate(execution,{.revision=2,.sessionGeneration=8,.placed=true,.survivalCritical=true}); EXPECT_EQ(BotPlanArbitrationReason::CriticalSurvival,survival.reason);
+	auto dead=BotPlanExecutor::delegate(execution,{.revision=2,.sessionGeneration=8,.placed=true,.dead=true}); EXPECT_EQ(BotPlanExecutionState::Dead,dead.state);
+	EXPECT_EQ(experienceBefore,player->getExperience()); EXPECT_EQ(storageBefore,player->getStorageValue(900100)); EXPECT_TRUE(manager.logout(fixture.name,false)); EXPECT_EQ(nullptr,session->getPlayer()); ASSERT_TRUE(fixture.cleanup()); EXPECT_FALSE(fixture.hasCommittedRows());
 }
