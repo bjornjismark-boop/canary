@@ -356,6 +356,33 @@ TEST(PlayerBotIntegrationTest, FleetHardeningReconstructsThreeCyclesWithoutDupli
 	ASSERT_TRUE(second.cleanup());
 }
 
+TEST(PlayerBotIntegrationTest, FleetHardeningResourcePressureBlocksLoginAndRecoversWithHysteresis) {
+	PlayerBotDatabaseFixture fixture(g_database(), Position(31510, 31510, 7));
+	createWalkableTile(fixture.start);
+	BotManager manager(g_game());
+	BotFleetPopulationPolicy population { .desiredOnline=1, .minimumOnline=0, .maximumOnline=1, .absoluteHardMaximum=1, .maximumLoginsPerInterval=1, .maximumLogoutsPerInterval=1, .maximumPendingLogins=1, .maximumPendingLogouts=1, .maximumRetries=3, .overloadRecoveryIntervals=1, .revision=1 };
+	ASSERT_EQ(BotFleetFailure::None, manager.configureFleet(population, {}, {{.id=fixture.playerId,.name=fixture.name}}, 10));
+	BotFleetResourcePolicy resources;
+	resources.recoveryObservations = 2;
+	ASSERT_TRUE(manager.configureFleetResources(resources));
+	auto blocked = manager.reconcileFleet(1, BotFleetResourceObservation{.dispatcherPressure=BotFleetPressureState::Critical});
+	EXPECT_TRUE(blocked.requests.empty());
+	EXPECT_EQ(BotFleetPressureState::Critical, manager.lastFleetLoadShedding().pressure);
+	BotFleetAdministration administration;
+	BotFleetTelemetry telemetry;
+	const auto snapshot = telemetry.collect(manager, administration);
+	ASSERT_TRUE(snapshot);
+	EXPECT_EQ(BotFleetPressureState::Critical, snapshot->pressureState);
+	EXPECT_LT(snapshot->reconciliationWorkBudget, resources.maximumReconciliationWorkPerTick);
+	EXPECT_TRUE(manager.reconcileFleet(2, BotFleetResourceObservation{}).requests.empty());
+	EXPECT_EQ(BotFleetPressureState::Recovering, manager.lastFleetLoadShedding().pressure);
+	auto recovered = manager.reconcileFleet(3, BotFleetResourceObservation{});
+	ASSERT_EQ(1, recovered.requests.size());
+	EXPECT_EQ(BotFleetPressureState::Normal, manager.lastFleetLoadShedding().pressure);
+	ASSERT_TRUE(manager.clear(false));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
 TEST(PlayerBotIntegrationTest, MultiBotCoordinationObservesPartyAndDelegatesFormationToM2) {
 	const Position origin(31000,31000,7), memberStart(31001,31000,7), objective(31002,31000,7),formationDestination(31003,30999,7);
 	PlayerBotDatabaseFixture first(g_database(),origin),second(g_database(),memberStart);for(int x=0;x<=3;++x)for(int y=-1;y<=1;++y)createWalkableTile(Position(origin.x+x,origin.y+y,origin.z));

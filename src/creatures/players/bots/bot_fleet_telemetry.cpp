@@ -16,6 +16,7 @@ std::shared_ptr<const BotFleetTelemetrySnapshot> BotFleetTelemetry::collect(cons
 	result->sequence = ++sequence;
 	if (const auto active = administration.activeRevision()) result->policyRevision = active->revision;
 	result->controllerState = manager.fleetState().state;
+	result->pressureState = manager.lastFleetLoadShedding().pressure;
 	result->reconciliationFailure = fleet.failure;
 	result->managedSessions = static_cast<uint32_t>(manager.size());
 	result->placed = fleet.placed;
@@ -26,6 +27,7 @@ std::shared_ptr<const BotFleetTelemetrySnapshot> BotFleetTelemetry::collect(cons
 	result->coordinationReservations = static_cast<uint32_t>(manager.coordinationReservationCount());
 	result->queuedCommands = static_cast<uint32_t>(administration.queued());
 	result->auditEntries = static_cast<uint32_t>(administration.audit().size());
+	result->reconciliationWorkBudget = manager.lastFleetLoadShedding().reconciliationWork;
 	result->failures = failures;
 	result->stopping = stopping;
 	g_metrics().addCounter("playerbots_fleet_telemetry_collections", 1);

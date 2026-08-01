@@ -24,9 +24,10 @@ BotFleetSoakPolicy BotFleetHardening::profile(BotFleetScaleProfile profile) {
 BotFleetLoadSheddingDecision BotFleetHardening::observe(const BotFleetResourcePolicy &p, const BotFleetResourceObservation &o, BotFleetPressureState previous, uint16_t healthy) {
 	BotFleetLoadSheddingDecision d;
 	const bool hard = o.managedBots > p.maximumManagedBots || o.pendingLogins > p.maximumPendingLogins || o.pendingLogouts > p.maximumPendingLogouts || o.commandsQueued > p.maximumCommandsQueued || o.plannerActions > p.maximumPlannerActionsPerTick || o.reconciliationWork > p.maximumReconciliationWorkPerTick;
-	const bool overloaded = o.dispatcherBacklog > p.maximumDispatcherBacklog || o.schedulerBacklog > p.maximumSchedulerBacklog || !o.databaseAvailable || !o.ordinaryPlayerResponsive;
-	const bool elevated = o.dispatcherBacklog > p.maximumDispatcherBacklog / 2 || o.schedulerBacklog > p.maximumSchedulerBacklog / 2;
-	if (hard || !o.ordinaryPlayerResponsive) d.pressure = BotFleetPressureState::Critical;
+	const bool categoryCritical = o.dispatcherPressure == BotFleetPressureState::Critical || o.schedulerPressure == BotFleetPressureState::Critical;
+	const bool overloaded = categoryCritical || o.dispatcherPressure == BotFleetPressureState::Overloaded || o.schedulerPressure == BotFleetPressureState::Overloaded || o.dispatcherBacklog > p.maximumDispatcherBacklog || o.schedulerBacklog > p.maximumSchedulerBacklog || !o.databaseAvailable || !o.ordinaryPlayerResponsive;
+	const bool elevated = o.dispatcherPressure == BotFleetPressureState::Elevated || o.schedulerPressure == BotFleetPressureState::Elevated || o.dispatcherBacklog > p.maximumDispatcherBacklog / 2 || o.schedulerBacklog > p.maximumSchedulerBacklog / 2;
+	if (hard || categoryCritical || !o.ordinaryPlayerResponsive) d.pressure = BotFleetPressureState::Critical;
 	else if (overloaded) d.pressure = BotFleetPressureState::Overloaded;
 	else if (previous == BotFleetPressureState::Critical || previous == BotFleetPressureState::Overloaded || previous == BotFleetPressureState::Recovering) d.pressure = healthy >= p.recoveryObservations ? BotFleetPressureState::Normal : BotFleetPressureState::Recovering;
 	else d.pressure = elevated ? BotFleetPressureState::Elevated : BotFleetPressureState::Normal;

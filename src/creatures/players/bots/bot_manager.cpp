@@ -377,6 +377,7 @@ void BotManager::clearCoordination() {
 BotFleetFailure BotManager::configureFleet(BotFleetPopulationPolicy population, BotFleetDistributionPolicy distribution, std::vector<BotFleetMemberProfile> members, uint32_t intervalTicks) {
 	if (const auto failure = BotFleet::validate(population); failure != BotFleetFailure::None) return failure;
 	if (const auto failure = BotFleet::validate(distribution, members); failure != BotFleetFailure::None) return failure;
+	if (population.absoluteHardMaximum > fleetResourcePolicy.maximumManagedBots || population.maximumPendingLogins > fleetResourcePolicy.maximumPendingLogins || population.maximumPendingLogouts > fleetResourcePolicy.maximumPendingLogouts) return BotFleetFailure::InvalidPolicy;
 	if (intervalTicks == 0 || intervalTicks > BotFleet::AbsoluteMaximumBackoffTicks) return BotFleetFailure::InvalidPolicy;
 	if (fleetEventId != 0) g_dispatcher().stopEvent(fleetEventId);
 	fleetEventId = 0;
@@ -449,6 +450,27 @@ BotFleetReconciliation BotManager::reconcileFleet(uint64_t now, bool overloaded)
 	return lastFleetResult;
 }
 
+bool BotManager::configureFleetResources(BotFleetResourcePolicy policy) {
+	if (!BotFleetHardening::validate(policy) || policy.maximumManagedBots < fleetPopulation.absoluteHardMaximum || policy.maximumPendingLogins < fleetPopulation.maximumPendingLogins || policy.maximumPendingLogouts < fleetPopulation.maximumPendingLogouts) return false;
+	fleetResourcePolicy = policy;
+	fleetHealthyResourceObservations = 0;
+	fleetLoadShedding = {};
+	return true;
+}
+
+BotFleetReconciliation BotManager::reconcileFleet(uint64_t now, const BotFleetResourceObservation &observation) {
+	if (!BotFleetHardening::validate(fleetResourcePolicy)) {
+		lastFleetResult = { .state = BotFleetControllerState::Failed, .failure = BotFleetFailure::InvalidPolicy };
+		return lastFleetResult;
+	}
+	const auto previous = fleetLoadShedding.pressure;
+	const bool healthy = observation.dispatcherPressure == BotFleetPressureState::Normal && observation.schedulerPressure == BotFleetPressureState::Normal && observation.databaseAvailable && observation.ordinaryPlayerResponsive;
+	if (healthy && fleetHealthyResourceObservations < std::numeric_limits<uint16_t>::max()) ++fleetHealthyResourceObservations;
+	else fleetHealthyResourceObservations = 0;
+	fleetLoadShedding = BotFleetHardening::observe(fleetResourcePolicy, observation, previous, fleetHealthyResourceObservations);
+	return reconcileFleet(now, !fleetLoadShedding.permitBotLogin);
+}
+
 bool BotManager::startFleet(uint64_t now) {
 	if (!fleetPopulation.enabled || fleetController.stopping || fleetEventId != 0) return false;
 	fleetController.startedAtTick = now;
@@ -472,8 +494,14 @@ void BotManager::scheduleFleetReconciliation() {
 }
 
 void BotManager::executeFleetReconciliation() {
-	const auto overloaded = g_dispatcher().getLoadState() != DispatcherLoadState::Normal || game.getGameState() == GAME_STATE_SHUTDOWN;
-	(void)reconcileFleet(g_dispatcher().getDispatcherCycle(), overloaded);
+	const auto dispatcher = g_dispatcher().getLoadState();
+	BotFleetResourceObservation observation {
+		.managedBots = static_cast<uint32_t>(size()),
+		.pendingLogins = static_cast<uint16_t>(std::min<uint32_t>(lastFleetResult.pendingLogins, std::numeric_limits<uint16_t>::max())),
+		.pendingLogouts = static_cast<uint16_t>(std::min<uint32_t>(lastFleetResult.pendingLogouts, std::numeric_limits<uint16_t>::max())),
+		.dispatcherPressure = dispatcher == DispatcherLoadState::Emergency || game.getGameState() == GAME_STATE_SHUTDOWN ? BotFleetPressureState::Critical : dispatcher == DispatcherLoadState::Constrained ? BotFleetPressureState::Overloaded : BotFleetPressureState::Normal,
+	};
+	(void)reconcileFleet(g_dispatcher().getDispatcherCycle(), observation);
 	scheduleFleetReconciliation();
 }
 

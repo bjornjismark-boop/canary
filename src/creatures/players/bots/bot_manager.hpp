@@ -8,6 +8,7 @@
 
 #include "creatures/players/bots/bot_coordination.hpp"
 #include "creatures/players/bots/bot_fleet.hpp"
+#include "creatures/players/bots/bot_fleet_hardening.hpp"
 #include "creatures/players/bots/bot_session.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
@@ -83,6 +84,8 @@ public:
 	void clearCoordination();
 	[[nodiscard]] BotFleetFailure configureFleet(BotFleetPopulationPolicy, BotFleetDistributionPolicy, std::vector<BotFleetMemberProfile>, uint32_t intervalTicks = 1000);
 	[[nodiscard]] BotFleetReconciliation reconcileFleet(uint64_t now, bool overloaded = false);
+	[[nodiscard]] BotFleetReconciliation reconcileFleet(uint64_t now, const BotFleetResourceObservation &);
+	[[nodiscard]] bool configureFleetResources(BotFleetResourcePolicy);
 	[[nodiscard]] bool startFleet(uint64_t now = 0);
 	void pauseFleet();
 	void resumeFleet();
@@ -92,6 +95,7 @@ public:
 	[[nodiscard]] bool logoutFleetMember(const std::string &name);
 	[[nodiscard]] const BotFleetControllerStateValue &fleetState() const { return fleetController; }
 	[[nodiscard]] const BotFleetReconciliation &lastFleetReconciliation() const { return lastFleetResult; }
+	[[nodiscard]] const BotFleetLoadSheddingDecision &lastFleetLoadShedding() const { return fleetLoadShedding; }
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();
@@ -109,6 +113,9 @@ private:
 	std::unordered_map<BotFleetMemberId, BotFleetObservation> fleetLifecycle;
 	BotFleetControllerStateValue fleetController;
 	BotFleetReconciliation lastFleetResult;
+	BotFleetResourcePolicy fleetResourcePolicy;
+	BotFleetLoadSheddingDecision fleetLoadShedding;
+	uint16_t fleetHealthyResourceObservations = 0;
 	std::shared_ptr<uint64_t> fleetLifetime = std::make_shared<uint64_t>(1);
 	uint64_t fleetEventId = 0;
 	uint64_t fleetObservationRevision = 0;

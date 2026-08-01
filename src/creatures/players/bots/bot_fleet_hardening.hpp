@@ -43,6 +43,8 @@ struct BotFleetResourceObservation {
 	uint32_t dispatcherBacklog = 0;
 	uint32_t schedulerBacklog = 0;
 	uint64_t telemetryAgeTicks = 0;
+	BotFleetPressureState dispatcherPressure = BotFleetPressureState::Normal;
+	BotFleetPressureState schedulerPressure = BotFleetPressureState::Normal;
 	bool databaseAvailable = true;
 	bool ordinaryPlayerResponsive = true;
 	bool operator==(const BotFleetResourceObservation &) const = default;

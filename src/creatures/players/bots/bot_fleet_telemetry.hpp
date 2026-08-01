@@ -7,6 +7,7 @@
 #pragma once
 
 #include "creatures/players/bots/bot_fleet_configuration.hpp"
+#include "creatures/players/bots/bot_fleet_hardening.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <array>
@@ -26,6 +27,7 @@ struct BotFleetTelemetrySnapshot {
 	uint64_t sequence = 0;
 	uint64_t policyRevision = 0;
 	BotFleetControllerState controllerState = BotFleetControllerState::Disabled;
+	BotFleetPressureState pressureState = BotFleetPressureState::Normal;
 	BotFleetFailure reconciliationFailure = BotFleetFailure::None;
 	uint32_t managedSessions = 0;
 	uint32_t placed = 0;
@@ -36,6 +38,7 @@ struct BotFleetTelemetrySnapshot {
 	uint32_t coordinationReservations = 0;
 	uint32_t queuedCommands = 0;
 	uint32_t auditEntries = 0;
+	uint16_t reconciliationWorkBudget = 0;
 	std::array<uint64_t, static_cast<size_t>(BotFleetTelemetryFailure::Count)> failures {};
 	bool stopping = false;
 	[[nodiscard]] bool containsWorldOwnership() const { return false; }
