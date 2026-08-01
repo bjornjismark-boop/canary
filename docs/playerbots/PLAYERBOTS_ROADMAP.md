@@ -563,6 +563,12 @@ Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment
 
 ## [ ] M9 — Socialt Beteende, Fleet och Production Hardening
 
+M9A partial evidence (2026-08-01): bounded value-only group, leadership, role,
+intent and advisory reservation contracts are implemented and covered by the
+canonical PlayerBot gate. The roadmap items below remain open until real party,
+M2 follow/formation, M3 combat, M3C retreat and M4 loot coordination are proven
+end to end with multiple authoritative sessions.
+
 ### Mål
 
 Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
