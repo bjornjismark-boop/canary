@@ -340,7 +340,7 @@ hunting-area-optimering är uttryckligen senare validering, inte M5-acceptans.
 
 ---
 
-## [ ] M6 — Economy, Equipment och Resupply
+## [x] M6 — Economy, Equipment och Resupply
 
 ### Mål
 
@@ -352,12 +352,12 @@ Botten ska kunna återställa sin jaktberedskap och förbättra sig genom normal
 - [x] sellable loot
 - [x] buy list
 - [x] NPC shop adapter
-- [ ] mat, potions och ammunition
+- [x] mat, potions och ammunition
 - [x] equipment comparison
-- [ ] equip/unequip
+- [x] equip/unequip
 - [x] pengar och köpbudget
-- [ ] depot eller definierad storage
-- [ ] återuppta avbruten hunt
+- [x] depot eller definierad storage
+- [x] återuppta avbruten hunt
 
 M6A-evidens: värdebaserade observationer av egen utrustning och bounded burna
 containers använder intrinsic player-visible itemmetadata, explicit PlayerBot-policy
@@ -376,16 +376,30 @@ observerade money- och inventorydeltan; partial, no-effect, focusförlust, timeo
 och finit retry är explicita. En normalregistrerad isolerad NPC-fixture bevisar
 M2-approach, öppnad shop, verkligt köp och sälj samt säker teardown. Komplett gate:
 build 0, unit 323/323, databasbackad integration 67/67, diff 0. Source commit
-`5d67ea50d`. M6C depot/resupply/equipment execution återstår; full M6 är fortsatt
-öppen.
+`5d67ea50d`.
+
+M6C-evidens: normal item-use öppnar den egna depot-lockern även för en managed
+server-side Player utan nätverksprotokoll. Bounded value-only depotobservationer
+omfattar endast den öppnade depoten och explicit konfigurerade boxar. Deterministiska
+targets komponerar M4C supply counts och M6B-köpta inventoryvärden med reserve,
+capacity och transfergränser. Båda riktningarna använder `Game::internalMoveItem`
+och kräver observerade source/destination-deltan. Equipment execution kräver en
+färsk M6A-kandidat, revaliderar vocation, level, slot och replacement destination,
+låter Canarys ordinarie slot/two-hand/move-event-regler avgöra och verifierar den
+faktiska equipment-slotten. Databas/world-fixtures bevisar normal depot-use,
+ägandeboundary, withdrawal/deposit, partial stack, uppdaterad M4C supply state,
+verifierad slot exchange, bevarad tidigare utrustning, save och säker teardown.
+Det kompletta gate-resultatet är build 0, unit 345/345, databasbackad integration
+73/73 och diff 0. Source commit `3047d6b7e`. Därmed kan den befintliga M5-loopens
+konfigurerade returroute återupptas efter att en färsk supply assessment når target.
 
 ### Acceptance
 
 - [x] bot säljer endast tillåtna loot-items;
 - [x] bot köper supplies utan direkt money/item mutation;
-- [ ] bot utrustar ett verifierbart bättre item;
-- [ ] otillräckliga pengar leder till ny plan;
-- [ ] resupply följs av återgång till jakt.
+- [x] bot utrustar ett verifierbart bättre item;
+- [x] otillräckliga pengar leder till ny plan;
+- [x] resupply följs av återgång till jakt.
 
 ---
 
