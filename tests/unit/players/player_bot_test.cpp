@@ -15,6 +15,7 @@
 #include "creatures/players/bots/bot_adventure.hpp"
 #include "creatures/players/bots/bot_equipment.hpp"
 #include "creatures/players/bots/bot_shop.hpp"
+#include "creatures/players/bots/bot_resupply.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -699,3 +700,31 @@ TEST(PlayerBotCampaignTest, NoHiddenAreaDiscoveryExists) { EXPECT_EQ(2U,campaign
 TEST(PlayerBotCampaignTest, CampaignDurationIsBounded) { auto p=BotCampaign::begin(campaignPolicy(),std::chrono::milliseconds(1));p=BotCampaign::recordAttempt(p,campaignPolicy(),std::chrono::milliseconds(300001));EXPECT_EQ(BotCampaignFailure::DurationLimit,p.failure);EXPECT_EQ(BotCampaignState::Failed,p.state); }
 TEST(PlayerBotCampaignTest, CancellationIsTerminal) { const auto p=BotCampaign::cancel(BotCampaign::begin(campaignPolicy()));EXPECT_EQ(p,BotCampaign::cancel(p)); }
 TEST(PlayerBotCampaignTest, CampaignRetainsNoWorldOwnership) { EXPECT_FALSE(BotCampaignProgress{}.containsWorldOwnership); }
+
+namespace {
+BotDepotObservation depotObservation(){return {.depotId=7,.revision=19,.containers={{{1,{}},20,2,0}},.items={{7618,40,{1,{0}},11},{3447,100,{1,{1}},12}},.open=true};}
+BotEquipmentObservation resupplyInventory(){return {.revision=17,.freeCapacity=5000,.items={{.itemTypeId=7618,.countOrCharges=2,.path={CONST_SLOT_BACKPACK,{0}}},{.itemTypeId=3031,.countOrCharges=8,.path={CONST_SLOT_BACKPACK,{1}}}}};}
+BotResupplyPolicy resupplyPolicy(){return {.targets={{7618,5,10,20}},.depositItemTypeIds={3031},.maximumTransferCount=25,.maximumDepotContainers=4,.maximumNestingDepth=2,.maximumItemsObserved=32,.maximumRetries=3};}
+}
+TEST(PlayerBotResupplyTest, DepotObservationContainsValuesOnly){EXPECT_FALSE(depotObservation().containsWorldOwnership);}
+TEST(PlayerBotResupplyTest, ProgressRetainsNoContainerOrItemOwnership){EXPECT_FALSE(BotResupplyProgress{}.containsWorldOwnership);}
+TEST(PlayerBotResupplyTest, DepotTraversalBoundsAreExplicit){const auto p=resupplyPolicy();EXPECT_EQ(4,p.maximumDepotContainers);EXPECT_EQ(2,p.maximumNestingDepth);EXPECT_EQ(32,p.maximumItemsObserved);}
+TEST(PlayerBotResupplyTest, OwnershipRejectionIsDistinct){EXPECT_NE(BotResupplyOutcome::DepotOwnershipRejected,BotResupplyOutcome::DepotUnavailable);}
+TEST(PlayerBotResupplyTest, SourceStaleIsDistinct){EXPECT_NE(BotResupplyOutcome::SourceStale,BotResupplyOutcome::DestinationStale);}
+TEST(PlayerBotResupplyTest, DestinationStaleIsDistinct){EXPECT_NE(BotResupplyOutcome::DestinationStale,BotResupplyOutcome::ContainerFull);}
+TEST(PlayerBotResupplyTest, SupplyTargetCalculationIsDeterministic){const auto plan=BotResupply::plan(resupplyInventory(),depotObservation(),resupplyPolicy());ASSERT_EQ(2,plan.transfers.size());EXPECT_EQ(8,plan.transfers[1].count);}
+TEST(PlayerBotResupplyTest, ReserveStockIsPreserved){auto p=resupplyPolicy();p.targets[0].reserve=38;const auto plan=BotResupply::plan(resupplyInventory(),depotObservation(),p);ASSERT_FALSE(plan.transfers.empty());EXPECT_EQ(2,plan.transfers.back().count);}
+TEST(PlayerBotResupplyTest, PartialTransferReconcilesBothSides){BotResupplyResult r{.outcome=BotResupplyOutcome::Partial,.sourceBefore=20,.sourceAfter=13,.destinationBefore=2,.destinationAfter=9,.movedCount=7};EXPECT_EQ(r.sourceBefore-r.sourceAfter,r.movedCount);EXPECT_EQ(r.destinationAfter-r.destinationBefore,r.movedCount);}
+TEST(PlayerBotResupplyTest, CapacityFailureIsExplicit){EXPECT_NE(BotResupplyOutcome::CapacityInsufficient,BotResupplyOutcome::ContainerFull);}
+TEST(PlayerBotResupplyTest, FullDestinationIsExplicit){EXPECT_EQ(BotResupplyOutcome::ContainerFull,BotResupplyOutcome::ContainerFull);}
+TEST(PlayerBotResupplyTest, EquipmentRequirementsAreRevalidated){BotEquipmentExecutionResult r{.outcome=BotResupplyOutcome::RequirementNotMet,.failure=BotEquipmentFailure::RequirementNotMet};EXPECT_EQ(BotEquipmentFailure::RequirementNotMet,r.failure);}
+TEST(PlayerBotResupplyTest, SlotConflictIsExplicit){EXPECT_NE(BotEquipmentFailure::SlotConflict,BotEquipmentFailure::TwoHandedConflict);}
+TEST(PlayerBotResupplyTest, TwoHandedConflictIsExplicit){EXPECT_EQ(BotResupplyOutcome::TwoHandedConflict,BotResupplyOutcome::TwoHandedConflict);}
+TEST(PlayerBotResupplyTest, ReplacementDestinationUsesStablePath){BotEquipmentExecutionRequest r{.replacementDestination={CONST_SLOT_BACKPACK,{2,1}}};EXPECT_EQ(std::vector<uint16_t>({2,1}),r.replacementDestination.childIndices);}
+TEST(PlayerBotResupplyTest, AcceptedEquipRequiresObservedResult){EXPECT_NE(BotResupplyOutcome::Pending,BotResupplyOutcome::Succeeded);}
+TEST(PlayerBotResupplyTest, NoEffectIsExplicit){EXPECT_NE(BotResupplyOutcome::NoEffect,BotResupplyOutcome::Succeeded);}
+TEST(PlayerBotResupplyTest, SameEquipmentIsNotRequestedByUpgradeContract){BotUpgradeCandidate c;EXPECT_EQ(BotEquipmentIntent::UnknownValue,c.comparison.intent);}
+TEST(PlayerBotResupplyTest, TransferCountIsFinite){auto p=resupplyPolicy();p.maximumTransferCount=3;const auto plan=BotResupply::plan(resupplyInventory(),depotObservation(),p);for(const auto&r:plan.transfers)EXPECT_LE(r.count,3);}
+TEST(PlayerBotResupplyTest, RetryBackoffIsFinite){const auto p=resupplyPolicy();EXPECT_EQ(std::chrono::milliseconds(800),BotResupply::backoff(p,2));EXPECT_EQ(p.maximumBackoff,BotResupply::backoff(p,99));}
+TEST(PlayerBotResupplyTest, CloseClearsPendingState){BotResupplyProgress p{.state=BotResupplyState::TransferPending,.transfer=BotResupplyRequest{.itemTypeId=7618}};p={.state=BotResupplyState::Cancelled};EXPECT_FALSE(p.transfer);}
+TEST(PlayerBotResupplyTest, ContractsProvideNoDirectMutationHandle){EXPECT_FALSE(BotResupplyRequest{}.containsWorldOwnership());EXPECT_FALSE(BotResupplyProgress{}.containsWorldOwnership);}

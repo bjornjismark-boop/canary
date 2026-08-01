@@ -58,6 +58,10 @@ public:
 	[[nodiscard]] BotShopObservation observeShop(const std::string &, uint32_t npcId, uint16_t maximumOffers = 256);
 	[[nodiscard]] BotShopTransactionResult executeShop(const std::string &, const BotShopTransactionRequest &, std::chrono::milliseconds, const BotShopPolicy & = {});
 	[[nodiscard]] BotShopTransactionResult cancelShop(const std::string &);
+	[[nodiscard]] BotDepotObservation observeDepot(const std::string &, uint32_t, const BotResupplyPolicy & = {});
+	[[nodiscard]] BotResupplyResult executeResupply(const std::string &, const BotResupplyRequest &, std::chrono::milliseconds, const BotResupplyPolicy & = {});
+	[[nodiscard]] BotEquipmentExecutionResult executeEquipment(const std::string &, const BotEquipmentExecutionRequest &, std::chrono::milliseconds, const BotEquipmentPolicy & = {});
+	[[nodiscard]] BotResupplyResult cancelResupply(const std::string &);
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

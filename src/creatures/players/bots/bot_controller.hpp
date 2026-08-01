@@ -15,6 +15,7 @@
 #include "creatures/players/bots/bot_adventure.hpp"
 #include "creatures/players/bots/bot_equipment.hpp"
 #include "creatures/players/bots/bot_shop.hpp"
+#include "creatures/players/bots/bot_resupply.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -74,6 +75,11 @@ public:
 	[[nodiscard]] BotShopTransactionResult executeShop(const BotShopTransactionRequest &, std::chrono::milliseconds now, const BotShopPolicy & = {});
 	[[nodiscard]] BotShopTransactionResult cancelShop();
 	[[nodiscard]] const BotShopProgress &getShopProgress() const { return shopProgress; }
+	[[nodiscard]] BotDepotObservation observeDepot(uint32_t depotId, const BotResupplyPolicy & = {});
+	[[nodiscard]] BotResupplyResult executeResupply(const BotResupplyRequest &, std::chrono::milliseconds now, const BotResupplyPolicy & = {});
+	[[nodiscard]] BotEquipmentExecutionResult executeEquipment(const BotEquipmentExecutionRequest &, std::chrono::milliseconds now, const BotEquipmentPolicy & = {});
+	[[nodiscard]] BotResupplyResult cancelResupply();
+	[[nodiscard]] const BotResupplyProgress &getResupplyProgress() const { return resupplyProgress; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -100,4 +106,5 @@ private:
 	BotAdventureProgress adventureProgress;
 	std::optional<BotEquipmentObservation> equipmentObservation;
 	BotShopProgress shopProgress;
+	BotResupplyProgress resupplyProgress;
 };

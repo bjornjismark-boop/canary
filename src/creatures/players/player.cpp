@@ -2006,7 +2006,9 @@ std::shared_ptr<DepotLocker> Player::getDepotLocker(uint32_t depotId) {
 	}
 
 	// We need to make room for stash on 12+ protocol versions and remove it for 10x.
-	const bool createStash = !client->oldProtocol;
+	// Managed server-side players have no network protocol, but still use the
+	// ordinary depot-opening path and current-protocol locker layout.
+	const bool createStash = !client || !client->oldProtocol;
 
 	auto depotLocker = std::make_shared<DepotLocker>(ITEM_LOCKER, createStash ? 4 : 3);
 	depotLocker->setDepotId(depotId);

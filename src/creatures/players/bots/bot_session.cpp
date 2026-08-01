@@ -206,6 +206,10 @@ BotEquipmentObservation BotSession::evaluateEquipment(const BotEquipmentPolicy &
 BotShopObservation BotSession::observeShop(uint32_t npcId, uint16_t maximumOffers) { if (state != BotSessionState::Placed || !controller) return {}; return controller->observeShop(npcId, maximumOffers); }
 BotShopTransactionResult BotSession::executeShop(const BotShopTransactionRequest &request, std::chrono::milliseconds now, const BotShopPolicy &policy) { if (state != BotSessionState::Placed || !controller) return { .outcome=BotShopOutcome::Cancelled,.failure=BotShopFailure::InvalidLifecycle,.state=BotShopState::Failed,.request=request }; return controller->executeShop(request, now, policy); }
 BotShopTransactionResult BotSession::cancelShop() { if (!controller) return { .outcome=BotShopOutcome::Cancelled,.failure=BotShopFailure::InvalidLifecycle,.state=BotShopState::Failed }; return controller->cancelShop(); }
+BotDepotObservation BotSession::observeDepot(uint32_t id,const BotResupplyPolicy &p){if(state!=BotSessionState::Placed||!controller)return{};return controller->observeDepot(id,p);}
+BotResupplyResult BotSession::executeResupply(const BotResupplyRequest&r,std::chrono::milliseconds n,const BotResupplyPolicy&p){if(state!=BotSessionState::Placed||!controller)return{.outcome=BotResupplyOutcome::Cancelled,.state=BotResupplyState::Failed,.request=r};return controller->executeResupply(r,n,p);}
+BotEquipmentExecutionResult BotSession::executeEquipment(const BotEquipmentExecutionRequest&r,std::chrono::milliseconds n,const BotEquipmentPolicy&p){if(state!=BotSessionState::Placed||!controller)return{.outcome=BotResupplyOutcome::Cancelled,.failure=BotEquipmentFailure::InvalidLifecycle,.state=BotResupplyState::Failed,.request=r};return controller->executeEquipment(r,n,p);}
+BotResupplyResult BotSession::cancelResupply(){if(!controller)return{.outcome=BotResupplyOutcome::Cancelled,.state=BotResupplyState::Failed};return controller->cancelResupply();}
 
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {

@@ -63,6 +63,7 @@ public:
 	[[nodiscard]] const BotAdventureProgress *getAdventureProgress() const { return controller ? &controller->getAdventureProgress() : nullptr; }
 	[[nodiscard]] const std::optional<BotEquipmentObservation> *getEquipmentObservation() const { return controller ? &controller->getEquipmentObservation() : nullptr; }
 	[[nodiscard]] const BotShopProgress *getShopProgress() const { return controller ? &controller->getShopProgress() : nullptr; }
+	[[nodiscard]] const BotResupplyProgress *getResupplyProgress() const { return controller ? &controller->getResupplyProgress() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -96,6 +97,10 @@ private:
 	[[nodiscard]] BotShopObservation observeShop(uint32_t npcId, uint16_t maximumOffers);
 	[[nodiscard]] BotShopTransactionResult executeShop(const BotShopTransactionRequest &, std::chrono::milliseconds, const BotShopPolicy &);
 	[[nodiscard]] BotShopTransactionResult cancelShop();
+	[[nodiscard]] BotDepotObservation observeDepot(uint32_t, const BotResupplyPolicy &);
+	[[nodiscard]] BotResupplyResult executeResupply(const BotResupplyRequest &, std::chrono::milliseconds, const BotResupplyPolicy &);
+	[[nodiscard]] BotEquipmentExecutionResult executeEquipment(const BotEquipmentExecutionRequest &, std::chrono::milliseconds, const BotEquipmentPolicy &);
+	[[nodiscard]] BotResupplyResult cancelResupply();
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();
