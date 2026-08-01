@@ -16,6 +16,7 @@
 #include "creatures/players/bots/bot_equipment.hpp"
 #include "creatures/players/bots/bot_shop.hpp"
 #include "creatures/players/bots/bot_resupply.hpp"
+#include "creatures/players/bots/bot_dialogue.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -80,6 +81,10 @@ public:
 	[[nodiscard]] BotEquipmentExecutionResult executeEquipment(const BotEquipmentExecutionRequest &, std::chrono::milliseconds now, const BotEquipmentPolicy & = {});
 	[[nodiscard]] BotResupplyResult cancelResupply();
 	[[nodiscard]] const BotResupplyProgress &getResupplyProgress() const { return resupplyProgress; }
+	[[nodiscard]] BotDialogueObservation observeDialogue(const BotNpcDialoguePolicy & = {});
+	[[nodiscard]] BotConversationResult advanceDialogue(uint32_t npcId, BotDialogueIntent, std::chrono::milliseconds, const BotNpcDialoguePolicy & = {});
+	[[nodiscard]] BotConversationResult cancelDialogue();
+	[[nodiscard]] const BotDialogueProgress &getDialogueProgress() const { return dialogueProgress; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -107,4 +112,5 @@ private:
 	std::optional<BotEquipmentObservation> equipmentObservation;
 	BotShopProgress shopProgress;
 	BotResupplyProgress resupplyProgress;
+	BotDialogueProgress dialogueProgress;
 };

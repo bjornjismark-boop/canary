@@ -91,6 +91,16 @@ enum ChannelEvent_t : uint8_t;
 enum SquareColor_t : uint8_t;
 enum Resource_t : uint8_t;
 
+struct PlayerVisibleSpeech {
+	uint64_t revision = 0;
+	uint32_t speakerId = 0;
+	std::string speakerName;
+	SpeakClasses type = static_cast<SpeakClasses>(0);
+	std::string text;
+	Position position;
+	auto operator<=>(const PlayerVisibleSpeech &) const = default;
+};
+
 enum class PlayerControlType : uint8_t {
 	Network,
 	Bot,
@@ -984,6 +994,9 @@ public:
 	void sendCreatureMove(const std::shared_ptr<Creature> &creature, const Position &newPos, int32_t newStackPos, const Position &oldPos, int32_t oldStackPos, bool teleport) const;
 	void sendCreatureTurn(const std::shared_ptr<Creature> &creature);
 	void sendCreatureSay(const std::shared_ptr<Creature> &creature, SpeakClasses type, const std::string &text, const Position* pos = nullptr) const;
+	[[nodiscard]] const std::deque<PlayerVisibleSpeech> &getVisibleSpeech() const { return visibleSpeech; }
+	[[nodiscard]] uint64_t getVisibleSpeechRevision() const { return visibleSpeechRevision; }
+	void clearVisibleSpeech() const { visibleSpeech.clear(); }
 	void sendCreatureReload(const std::shared_ptr<Creature> &creature) const;
 	void sendPrivateMessage(const std::shared_ptr<Player> &speaker, SpeakClasses type, const std::string &text) const;
 	void sendCreatureSquare(const std::shared_ptr<Creature> &creature, SquareColor_t color) const;
@@ -1977,6 +1990,8 @@ private:
 
 	std::shared_ptr<Account> account;
 	bool online = true;
+	mutable std::deque<PlayerVisibleSpeech> visibleSpeech;
+	mutable uint64_t visibleSpeechRevision = 0;
 
 	bool hasQuiverEquipped() const;
 

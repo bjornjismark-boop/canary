@@ -64,6 +64,7 @@ public:
 	[[nodiscard]] const std::optional<BotEquipmentObservation> *getEquipmentObservation() const { return controller ? &controller->getEquipmentObservation() : nullptr; }
 	[[nodiscard]] const BotShopProgress *getShopProgress() const { return controller ? &controller->getShopProgress() : nullptr; }
 	[[nodiscard]] const BotResupplyProgress *getResupplyProgress() const { return controller ? &controller->getResupplyProgress() : nullptr; }
+	[[nodiscard]] const BotDialogueProgress *getDialogueProgress() const { return controller ? &controller->getDialogueProgress() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -101,6 +102,9 @@ private:
 	[[nodiscard]] BotResupplyResult executeResupply(const BotResupplyRequest &, std::chrono::milliseconds, const BotResupplyPolicy &);
 	[[nodiscard]] BotEquipmentExecutionResult executeEquipment(const BotEquipmentExecutionRequest &, std::chrono::milliseconds, const BotEquipmentPolicy &);
 	[[nodiscard]] BotResupplyResult cancelResupply();
+	[[nodiscard]] BotDialogueObservation observeDialogue(const BotNpcDialoguePolicy &);
+	[[nodiscard]] BotConversationResult advanceDialogue(uint32_t,BotDialogueIntent,std::chrono::milliseconds,const BotNpcDialoguePolicy &);
+	[[nodiscard]] BotConversationResult cancelDialogue();
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

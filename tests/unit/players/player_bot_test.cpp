@@ -16,6 +16,7 @@
 #include "creatures/players/bots/bot_equipment.hpp"
 #include "creatures/players/bots/bot_shop.hpp"
 #include "creatures/players/bots/bot_resupply.hpp"
+#include "creatures/players/bots/bot_dialogue.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -728,3 +729,27 @@ TEST(PlayerBotResupplyTest, TransferCountIsFinite){auto p=resupplyPolicy();p.max
 TEST(PlayerBotResupplyTest, RetryBackoffIsFinite){const auto p=resupplyPolicy();EXPECT_EQ(std::chrono::milliseconds(800),BotResupply::backoff(p,2));EXPECT_EQ(p.maximumBackoff,BotResupply::backoff(p,99));}
 TEST(PlayerBotResupplyTest, CloseClearsPendingState){BotResupplyProgress p{.state=BotResupplyState::TransferPending,.transfer=BotResupplyRequest{.itemTypeId=7618}};p={.state=BotResupplyState::Cancelled};EXPECT_FALSE(p.transfer);}
 TEST(PlayerBotResupplyTest, ContractsProvideNoDirectMutationHandle){EXPECT_FALSE(BotResupplyRequest{}.containsWorldOwnership());EXPECT_FALSE(BotResupplyProgress{}.containsWorldOwnership);}
+
+namespace{BotNpcDialoguePolicy dialoguePolicy(){return{.configuredNpcNames={"guide"},.phrases={{BotDialogueIntent::Greeting,"hi","welcome"},{BotDialogueIntent::Farewell,"bye","farewell"},{BotDialogueIntent::Yes,"yes","confirmed"},{BotDialogueIntent::No,"no","cancelled"},{BotDialogueIntent::Trade,"trade","offer"},{BotDialogueIntent::ConfiguredTopic,"job","guide"},{BotDialogueIntent::ConfiguredFollowUp,"help","help"}},.maximumPhrases=4,.maximumRetries=2,.maximumTopics=3,.maximumResponseLength=32};}BotDialogueObservation dialogueObservation(){return{.revision=3,.npcs={{7,"guide",{100,100,7},1,true,true,false,3},{9,"guide",{101,100,7},2,true,true,false,4}}};}}
+TEST(PlayerBotDialogueTest,NpcObservationContainsValuesOnly){EXPECT_FALSE(dialogueObservation().npcs.front().containsWorldOwnership());}
+TEST(PlayerBotDialogueTest,ProgressRetainsNoNpcOrLuaOwnership){EXPECT_FALSE(BotDialogueProgress{}.containsWorldOwnership);}
+TEST(PlayerBotDialogueTest,ConfiguredSelectionIsDeterministic){EXPECT_EQ(7,BotDialogue::select(dialogueObservation(),dialoguePolicy())->npcId);}
+TEST(PlayerBotDialogueTest,HiddenNpcIsRejected){auto o=dialogueObservation();o.npcs[0].visible=false;o.npcs[1].visible=false;EXPECT_FALSE(BotDialogue::select(o,dialoguePolicy()));}
+TEST(PlayerBotDialogueTest,DifferentFloorNpcIsRejected){auto o=dialogueObservation();for(auto&n:o.npcs)n.sameFloor=false;EXPECT_FALSE(BotDialogue::select(o,dialoguePolicy()));}
+TEST(PlayerBotDialogueTest,GreetingStateIsRepresented){EXPECT_EQ(BotDialogueState::GreetingPending,BotDialogueState::GreetingPending);}
+TEST(PlayerBotDialogueTest,GreetingRequiresObservedResponse){EXPECT_NE(BotDialogueResponse::NoResponse,BotDialogueResponse::GreetingAccepted);}
+TEST(PlayerBotDialogueTest,NoResponseCanReachTimeout){EXPECT_NE(BotDialogueResponse::NoResponse,BotDialogueResponse::TimedOut);}
+TEST(PlayerBotDialogueTest,UnexpectedResponseIsExplicit){EXPECT_EQ(BotDialogueResponse::UnexpectedResponse,BotDialogueResponse::UnexpectedResponse);}
+TEST(PlayerBotDialogueTest,PhraseCountIsBounded){EXPECT_EQ(4,dialoguePolicy().maximumPhrases);}
+TEST(PlayerBotDialogueTest,TopicCountIsBounded){auto p=dialoguePolicy();p.maximumTopics=0;EXPECT_EQ(nullptr,BotDialogue::phrase(p,BotDialogueIntent::ConfiguredTopic));}
+TEST(PlayerBotDialogueTest,RetryBackoffIsFinite){const auto p=dialoguePolicy();EXPECT_EQ(std::chrono::milliseconds(500),BotDialogue::backoff(p,1));EXPECT_EQ(p.maximumBackoff,BotDialogue::backoff(p,99));}
+TEST(PlayerBotDialogueTest,SpeechSpamHasSingleAwaitingState){BotDialogueProgress p{.state=BotDialogueState::AwaitingResponse,.npcId=7,.intent=BotDialogueIntent::Greeting};EXPECT_EQ(BotDialogueState::AwaitingResponse,p.state);}
+TEST(PlayerBotDialogueTest,FocusLossIsExplicit){EXPECT_EQ(BotDialogueResponse::FocusLost,BotDialogueResponse::FocusLost);}
+TEST(PlayerBotDialogueTest,NpcDisappearanceIsExplicit){EXPECT_EQ(BotDialogueFailure::NpcUnavailable,BotDialogueFailure::NpcUnavailable);}
+TEST(PlayerBotDialogueTest,MovementAwayIsExplicit){EXPECT_EQ(BotDialogueResponse::OutOfRange,BotDialogueResponse::OutOfRange);}
+TEST(PlayerBotDialogueTest,FarewellPhraseIsConfigured){EXPECT_EQ("bye",BotDialogue::phrase(dialoguePolicy(),BotDialogueIntent::Farewell)->text);}
+TEST(PlayerBotDialogueTest,CancellationIsTerminal){BotConversationResult r{.state=BotDialogueState::Cancelled,.response=BotDialogueResponse::Cancelled};EXPECT_EQ(BotDialogueState::Cancelled,r.state);}
+TEST(PlayerBotDialogueTest,SessionCloseValueStateClears){BotDialogueProgress p{.state=BotDialogueState::AwaitingResponse,.npcId=7};p={.state=BotDialogueState::Cancelled};EXPECT_EQ(0,p.npcId);}
+TEST(PlayerBotDialogueTest,ResponseBufferLengthIsBounded){EXPECT_EQ(32,dialoguePolicy().maximumResponseLength);}
+TEST(PlayerBotDialogueTest,IdenticalObservationsProduceDeterministicIntent){EXPECT_EQ(BotDialogue::select(dialogueObservation(),dialoguePolicy()),BotDialogue::select(dialogueObservation(),dialoguePolicy()));}
+TEST(PlayerBotDialogueTest,ContractsContainNoStorageOrRewardMutation){EXPECT_FALSE(BotDialogueObservation{}.containsWorldOwnership());EXPECT_EQ(nullptr,BotDialogue::phrase(dialoguePolicy(),BotDialogueIntent::Cancel));}

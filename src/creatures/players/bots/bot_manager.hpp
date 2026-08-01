@@ -62,6 +62,9 @@ public:
 	[[nodiscard]] BotResupplyResult executeResupply(const std::string &, const BotResupplyRequest &, std::chrono::milliseconds, const BotResupplyPolicy & = {});
 	[[nodiscard]] BotEquipmentExecutionResult executeEquipment(const std::string &, const BotEquipmentExecutionRequest &, std::chrono::milliseconds, const BotEquipmentPolicy & = {});
 	[[nodiscard]] BotResupplyResult cancelResupply(const std::string &);
+	[[nodiscard]] BotDialogueObservation observeDialogue(const std::string &, const BotNpcDialoguePolicy & = {});
+	[[nodiscard]] BotConversationResult advanceDialogue(const std::string &, uint32_t, BotDialogueIntent, std::chrono::milliseconds, const BotNpcDialoguePolicy & = {});
+	[[nodiscard]] BotConversationResult cancelDialogue(const std::string &);
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

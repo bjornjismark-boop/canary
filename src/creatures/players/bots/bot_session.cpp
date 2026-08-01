@@ -210,6 +210,9 @@ BotDepotObservation BotSession::observeDepot(uint32_t id,const BotResupplyPolicy
 BotResupplyResult BotSession::executeResupply(const BotResupplyRequest&r,std::chrono::milliseconds n,const BotResupplyPolicy&p){if(state!=BotSessionState::Placed||!controller)return{.outcome=BotResupplyOutcome::Cancelled,.state=BotResupplyState::Failed,.request=r};return controller->executeResupply(r,n,p);}
 BotEquipmentExecutionResult BotSession::executeEquipment(const BotEquipmentExecutionRequest&r,std::chrono::milliseconds n,const BotEquipmentPolicy&p){if(state!=BotSessionState::Placed||!controller)return{.outcome=BotResupplyOutcome::Cancelled,.failure=BotEquipmentFailure::InvalidLifecycle,.state=BotResupplyState::Failed,.request=r};return controller->executeEquipment(r,n,p);}
 BotResupplyResult BotSession::cancelResupply(){if(!controller)return{.outcome=BotResupplyOutcome::Cancelled,.state=BotResupplyState::Failed};return controller->cancelResupply();}
+BotDialogueObservation BotSession::observeDialogue(const BotNpcDialoguePolicy&p){if(state!=BotSessionState::Placed||!controller)return{};return controller->observeDialogue(p);}
+BotConversationResult BotSession::advanceDialogue(uint32_t id,BotDialogueIntent i,std::chrono::milliseconds n,const BotNpcDialoguePolicy&p){if(state!=BotSessionState::Placed||!controller)return{.state=BotDialogueState::Failed,.failure=BotDialogueFailure::InvalidLifecycle,.npcId=id,.intent=i};return controller->advanceDialogue(id,i,n,p);}
+BotConversationResult BotSession::cancelDialogue(){if(!controller)return{.state=BotDialogueState::Cancelled,.response=BotDialogueResponse::Cancelled,.failure=BotDialogueFailure::InvalidLifecycle};return controller->cancelDialogue();}
 
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {

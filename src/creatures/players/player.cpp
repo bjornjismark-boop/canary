@@ -8711,6 +8711,10 @@ void Player::sendCreatureTurn(const std::shared_ptr<Creature> &creature) {
 }
 
 void Player::sendCreatureSay(const std::shared_ptr<Creature> &creature, SpeakClasses type, const std::string &text, const Position* pos) const {
+	if (creature) {
+		visibleSpeech.push_back({ ++visibleSpeechRevision, creature->getID(), creature->getName(), type, text.substr(0, 512), pos ? *pos : creature->getPosition() });
+		while (visibleSpeech.size() > 16) visibleSpeech.pop_front();
+	}
 	if (client) {
 		client->sendCreatureSay(creature, type, text, pos);
 	}

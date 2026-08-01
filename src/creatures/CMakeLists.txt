@@ -39,6 +39,8 @@ target_sources(
 			players/bots/bot_shop.hpp
 			players/bots/bot_resupply.cpp
 			players/bots/bot_resupply.hpp
+			players/bots/bot_dialogue.cpp
+			players/bots/bot_dialogue.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp
