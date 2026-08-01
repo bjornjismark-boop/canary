@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import shlex
 import signal
@@ -264,9 +265,10 @@ def create_runtime_directory(source_config: Path, run_directory: Path, repo: Pat
 
 
 class DatabaseLifecycle:
-    def __init__(self, env: dict[str, str], unique_name: str, run_directory: Path, bots: int):
+    def __init__(self, env: dict[str, str], unique_name: str, run_directory: Path, bots: int, ordinary_password: str):
         self.env, self.name, self.run_directory = env, unique_name, run_directory
         self.bots = bots
+        self.ordinary_password = ordinary_password
         self.client = env.get("TEST_DB_CLIENT") or shutil.which("mysql") or shutil.which("mariadb")
         if not self.client: raise SoakError("mysql or mariadb client is required")
         self.defaults = run_directory / "mysql-client.cnf"
@@ -300,7 +302,7 @@ class DatabaseLifecycle:
                 fixtures.append(f"INSERT INTO accounts (id,name,email,password) VALUES ({fixture_id},'soak_bot_{index + 1}','bot{index + 1}@test.invalid','');")
                 fixtures.append("INSERT INTO players (id,name,account_id,group_id,vocation,town_id,health,healthmax,mana,manamax,cap,conditions,posx,posy,posz,deletion) "
                                 f"VALUES ({fixture_id},'{name}',{fixture_id},1,1,1,150,150,100,100,100000,X'',0,0,0,0);")
-            ordinary_password = hashlib.sha1(b"ordinary-soak-password", usedforsecurity=False).hexdigest()
+            ordinary_password = hashlib.sha1(self.ordinary_password.encode("utf-8"), usedforsecurity=False).hexdigest()
             fixtures.append(f"INSERT INTO accounts (id,name,email,password) VALUES (20001,'ordinary_soak','ordinary@test.invalid','{ordinary_password}');")
             fixtures.append("INSERT INTO players (id,name,account_id,group_id,level,vocation,town_id,health,healthmax,mana,manamax,cap,conditions,posx,posy,posz,deletion) "
                             "VALUES (20001,'Ordinary Soak',20001,1,8,1,1,185,185,90,90,47000,X'',0,0,0,0);")
@@ -409,13 +411,14 @@ def main(argv: list[str] | None = None) -> int:
     # The configured account is intentionally granted only on the explicitly
     # resettable test database. Recreate that exact name; never broaden grants.
     unique_db = db
-    database = DatabaseLifecycle(env, unique_db, directory, args.bots)
+    ordinary_password = secrets.token_urlsafe(32)
+    database = DatabaseLifecycle(env, unique_db, directory, args.bots, ordinary_password)
     runtime, ports = create_runtime_directory(args.config, directory, Path(__file__).resolve().parents[1], env, unique_db, args.bots)
     client_environment = directory / "ordinary-client.env"
     client_values = {
         "SOAK_HOST": "127.0.0.1", "SOAK_LOGIN_PORT": str(ports["login"]),
         "SOAK_GAME_PORT": str(ports["legacy860"]), "SOAK_ACCOUNT": "ordinary_soak",
-        "SOAK_PASSWORD": "ordinary-soak-password", "SOAK_CHARACTER": "Ordinary Soak",
+        "SOAK_PASSWORD": ordinary_password, "SOAK_CHARACTER": "Ordinary Soak",
         "SOAK_TIMEOUT_SECONDS": "15", "SOAK_HEARTBEAT_SECONDS": "5",
         "SOAK_READY_FILE": str(directory / "ordinary-client-ready.txt"),
     }
