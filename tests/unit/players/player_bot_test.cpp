@@ -10,6 +10,7 @@
 #include "creatures/players/bots/bot_runtime.hpp"
 #include "creatures/players/bots/bot_combat.hpp"
 #include "creatures/players/bots/bot_survival.hpp"
+#include "creatures/players/bots/bot_loot.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -477,3 +478,31 @@ TEST(PlayerBotSurvivalTest, NoDirectConditionMutationExists) { EXPECT_TRUE(std::
 TEST(PlayerBotSurvivalTest, NoDirectPositionMutationExists) { EXPECT_TRUE(std::is_aggregate_v<BotFleeRequest>); }
 TEST(PlayerBotSurvivalTest, IdenticalInputsProduceIdenticalDecisions) { auto a=assessSurvival(survival(10),{heal()},true);auto b=assessSurvival(survival(10),{heal()},true);EXPECT_EQ(a.decision,b.decision);EXPECT_EQ(a.score,b.score); }
 TEST(PlayerBotSurvivalTest, ScoreArithmeticCannotOverflow) { auto o=survival(1);o.recentDamage=UINT32_MAX;o.visibleHostiles=UINT16_MAX;BotSurvivalPolicy p;p.recentDamageWeight=UINT32_MAX;p.hostileWeight=UINT32_MAX;EXPECT_EQ(p.scoreLimit,BotSurvival::assess(o,p,{},false).score.total); }
+
+namespace {
+BotCorpseObservation lootCorpse() {
+	BotCorpseObservation corpse { .observationRevision = 5, .position = Position(100, 100, 7), .corpseItemTypeId = ITEM_MALE_CORPSE, .sourceCreatureId = 77, .ownerCreatureId = 1, .ownership = BotCorpseOwnership::Self, .remainingDecayMilliseconds = 60000, .containerCapacity = 10, .containerSize = 2 };
+	corpse.items = {
+		{ .itemTypeId = 2148, .count = 50, .weight = 500, .stackPosition = 0, .stackable = true, .signature = 10 },
+		{ .itemTypeId = ITEM_BACKPACK, .count = 1, .weight = 1800, .stackPosition = 1, .nestedContainer = true, .signature = 20 },
+	};
+	corpse.signature = BotLoot::signature(corpse);
+	return corpse;
+}
+BotLootPolicy lootPolicy() { return { .rules = { { .itemTypeId = 2148, .valueCategory = 2, .priority = 10 }, { .itemTypeId = ITEM_BACKPACK, .valueCategory = 1, .priority = 1 } } }; }
+}
+
+TEST(PlayerBotLootTest, CorpseObservationContainsValuesOnly) { EXPECT_TRUE(std::is_trivially_destructible_v<BotCorpseSignature>); EXPECT_FALSE(lootCorpse().containsWorldOwnership); }
+TEST(PlayerBotLootTest, LootStateRetainsNoWorldOwnership) { auto result=BotLoot::select(lootCorpse(),10000,lootPolicy()); EXPECT_FALSE(result.corpse.containsWorldOwnership); }
+TEST(PlayerBotLootTest, StaleCorpseSignatureChangesDeterministically) { auto corpse=lootCorpse();const auto before=corpse.signature;corpse.items[0].count++;EXPECT_NE(before,BotLoot::signature(corpse));corpse=lootCorpse();corpse.sourceCreatureId++;EXPECT_NE(before,BotLoot::signature(corpse)); }
+TEST(PlayerBotLootTest, OwnershipDenialIsExplicit) { auto corpse=lootCorpse();corpse.ownership=BotCorpseOwnership::Denied;EXPECT_EQ(BotLootEligibility::NoLootRights,BotLoot::select(corpse,10000,lootPolicy()).eligibility); }
+TEST(PlayerBotLootTest, VisibleEligibleCorpseSelectsConfiguredLoot) { const auto result=BotLoot::select(lootCorpse(),10000,lootPolicy());ASSERT_TRUE(result.selected);EXPECT_EQ(2148,result.selected->item.itemTypeId); }
+TEST(PlayerBotLootTest, ExpiredCorpseIsRejected) { auto corpse=lootCorpse();corpse.remainingDecayMilliseconds=0;EXPECT_EQ(BotLootEligibility::CorpseExpired,BotLoot::select(corpse,10000,lootPolicy()).eligibility); }
+TEST(PlayerBotLootTest, UnreachableCorpseOutcomeIsRepresentable) { BotLootSelectionResult result{.eligibility=BotLootEligibility::Unreachable,.failure=BotLootFailure::Unreachable};EXPECT_EQ(BotLootFailure::Unreachable,result.failure); }
+TEST(PlayerBotLootTest, ItemClassificationIsDeterministic) { const auto a=BotLoot::select(lootCorpse(),10000,lootPolicy());const auto b=BotLoot::select(lootCorpse(),10000,lootPolicy());EXPECT_EQ(a.selected,b.selected); }
+TEST(PlayerBotLootTest, StackableCountIsPreserved) { const auto result=BotLoot::select(lootCorpse(),10000,lootPolicy());ASSERT_TRUE(result.selected);EXPECT_EQ(50U,result.selected->item.count);EXPECT_TRUE(result.selected->item.stackable); }
+TEST(PlayerBotLootTest, CapacityProjectionRejectsHeavyItem) { EXPECT_EQ(BotLootEligibility::CapacityInsufficient,BotLoot::select(lootCorpse(),100,lootPolicy()).eligibility); }
+TEST(PlayerBotLootTest, NestedContainerObservationIsBoundedValueData) { auto corpse=lootCorpse();EXPECT_EQ(2U,corpse.items.size());EXPECT_TRUE(corpse.items[1].nestedContainer);EXPECT_EQ(0,corpse.items[1].depth); }
+TEST(PlayerBotLootTest, CandidateEvaluationBudgetIsBounded) { auto policy=lootPolicy();policy.maxItemCandidates=1;const auto result=BotLoot::select(lootCorpse(),10000,policy);EXPECT_EQ(1,result.evaluatedItems);EXPECT_EQ(BotLootEligibility::EvaluationBudgetExceeded,result.eligibility); }
+TEST(PlayerBotLootTest, EqualCandidatesUseStableItemTieBreak) { auto corpse=lootCorpse();corpse.items[1].itemTypeId=2152;corpse.items[1].weight=500;auto policy=lootPolicy();policy.rules={{2148,1,1},{2152,1,1}};const auto result=BotLoot::select(corpse,10000,policy);ASSERT_TRUE(result.selected);EXPECT_EQ(2148,result.selected->item.itemTypeId); }
+TEST(PlayerBotLootTest, EvaluationDoesNotMutateInventoryOrCorpse) { const auto corpse=lootCorpse();const auto copy=corpse;(void)BotLoot::select(corpse,10000,lootPolicy());EXPECT_EQ(copy,corpse); }

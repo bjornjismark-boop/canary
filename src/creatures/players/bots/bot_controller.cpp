@@ -102,6 +102,13 @@ BotDeathResult BotController::observeDeath() {
 
 void BotController::cancelSurvival() { if (survivalProgress.state != BotSurvivalState::Dead) survivalProgress = { .state = BotSurvivalState::Cancelled }; }
 
+BotLootSelectionResult BotController::evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature, const BotLootPolicy &policy) {
+	const auto controlled = player.lock();
+	const auto observation = BotPerception::observe(controlled);
+	if (!observation) return { .eligibility = BotLootEligibility::InvalidLifecycle, .failure = BotLootFailure::InvalidLifecycle };
+	return BotLoot::observe(controlled, *observation, position, sourceCreatureId, expectedSignature, policy);
+}
+
 BotActionResult BotController::tick(std::chrono::milliseconds now) {
 	lastTickWork = 0;
 	if (now < nextTickAt) {

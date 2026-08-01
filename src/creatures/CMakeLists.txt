@@ -27,6 +27,8 @@ target_sources(
             players/bots/bot_combat.hpp
 			players/bots/bot_survival.cpp
 			players/bots/bot_survival.hpp
+			players/bots/bot_loot.cpp
+			players/bots/bot_loot.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp

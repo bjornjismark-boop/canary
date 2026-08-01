@@ -84,6 +84,7 @@ private:
 	[[nodiscard]] BotHealingResult executeHealing(const BotHealingOption &, std::chrono::milliseconds, const BotSurvivalPolicy &);
 	[[nodiscard]] BotFleeResult executeFlee(std::chrono::milliseconds, const BotSurvivalPolicy &);
 	[[nodiscard]] BotDeathResult observeDeath();
+	[[nodiscard]] BotLootSelectionResult evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature = {}, const BotLootPolicy &policy = {});
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

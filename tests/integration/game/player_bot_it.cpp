@@ -1310,3 +1310,134 @@ TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerDeathStillUsesNormalCorpsePi
 	ASSERT_TRUE(fixture.cleanup());
 	EXPECT_FALSE(fixture.hasCommittedRows());
 }
+
+TEST(PlayerBotIntegrationTest, RealMonsterDeathCreatesEligibleValueOnlyCorpseObservationWithoutTransfer) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position corpsePosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	for (int x = -1; x <= 2; ++x) for (int y = -1; y <= 1; ++y) createWalkableTile(Position(fixture.start.x + x, fixture.start.y + y, fixture.start.z));
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	auto monsterType = std::make_shared<MonsterType>("LootPerceptionMonster");
+	monsterType->info.health = 20;
+	monsterType->info.healthMax = 20;
+	monsterType->info.lookcorpse = 3994;
+	auto monster = std::make_shared<Monster>(monsterType);
+	ASSERT_TRUE(g_game().placeCreature(monster, corpsePosition, false, true));
+	const auto sourceCreatureId = monster->getID();
+	UPDATE_OTSYS_TIME();
+	CombatDamage damage;
+	damage.primary = { COMBAT_PHYSICALDAMAGE, -100000 };
+	ASSERT_TRUE(g_game().combatChangeHealth(player, monster, damage));
+	ASSERT_EQ(0, monster->getHealth());
+	// The integration harness does not run the dispatcher thread that normally
+	// consumes Game::executeDeath, so advance the authoritative creature death
+	// pipeline synchronously after real combat has reduced health to zero.
+	monster->onDeath();
+	ASSERT_TRUE(monster->isRemoved());
+	ASSERT_TRUE(Item::items[3994].isCorpse);
+	const auto tile = g_game().map.getTile(corpsePosition);
+	ASSERT_NE(nullptr, tile);
+	std::shared_ptr<Item> corpse;
+	for (const auto &item : *tile->getItemList()) if (item && item->isCorpse() && item->getContainer()) { corpse = item; break; }
+	ASSERT_NE(nullptr, corpse);
+	auto gold = Item::CreateItem(3031, 50);
+	// Production loot insertion uses this same fallback when the integration
+	// configuration's global container-item limit rejects internalAddItem.
+	corpse->getContainer()->internalAddThing(gold);
+	ASSERT_EQ(corpse->getContainer(), gold->getParent());
+	const auto corpseSize = corpse->getContainer()->size();
+	const auto carriedBefore = std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031);
+	BotLootPolicy policy { .rules = { { .itemTypeId = 3031, .valueCategory = 2, .priority = 10 } } };
+	const auto result = manager.evaluateLoot(fixture.name, corpsePosition, sourceCreatureId, {}, policy);
+	EXPECT_EQ(BotLootEligibility::Eligible, result.eligibility);
+	EXPECT_EQ(sourceCreatureId, result.corpse.sourceCreatureId);
+	EXPECT_EQ(player->getID(), result.corpse.ownerCreatureId);
+	EXPECT_EQ(BotCorpseOwnership::Self, result.corpse.ownership);
+	EXPECT_FALSE(result.corpse.containsWorldOwnership);
+	ASSERT_TRUE(result.selected);
+	EXPECT_EQ(3031, result.selected->item.itemTypeId);
+	EXPECT_EQ(50U, result.selected->item.count);
+	EXPECT_EQ(corpseSize, corpse->getContainer()->size());
+	EXPECT_EQ(carriedBefore, std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031));
+	auto platinum = Item::CreateItem(3035, 1);
+	corpse->getContainer()->internalAddThing(platinum);
+	ASSERT_EQ(corpse->getContainer(), platinum->getParent());
+	EXPECT_EQ(BotLootEligibility::StaleObservation, manager.evaluateLoot(fixture.name, corpsePosition, sourceCreatureId, result.corpse.signature, policy).eligibility);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalRemoveItem(corpse));
+	EXPECT_EQ(BotLootEligibility::InvalidCorpse, manager.evaluateLoot(fixture.name, corpsePosition, sourceCreatureId, {}, policy).eligibility);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, RealCorpseLootRightsDenyUnrelatedPlayerBot) {
+	PlayerBotDatabaseFixture observerFixture(g_database());
+	PlayerBotDatabaseFixture killerFixture(g_database(), Position(observerFixture.start.x + 1, observerFixture.start.y, observerFixture.start.z));
+	const Position corpsePosition(observerFixture.start.x, observerFixture.start.y + 1, observerFixture.start.z);
+	for (int x = -1; x <= 2; ++x) for (int y = -1; y <= 2; ++y) createWalkableTile(Position(observerFixture.start.x + x, observerFixture.start.y + y, observerFixture.start.z));
+	BotManager manager(g_game());
+	const auto observer = loginBotOrReport(manager, observerFixture.name);
+	const auto killer = loginBotOrReport(manager, killerFixture.name);
+	ASSERT_NE(nullptr, observer);
+	ASSERT_NE(nullptr, killer);
+	auto killerPlayer = std::const_pointer_cast<Player>(killer->getPlayer());
+	auto monsterType = std::make_shared<MonsterType>("LootRightsMonster");
+	monsterType->info.health = 20; monsterType->info.healthMax = 20; monsterType->info.lookcorpse = 3994;
+	auto monster = std::make_shared<Monster>(monsterType);
+	ASSERT_TRUE(g_game().placeCreature(monster, corpsePosition, false, true));
+	const auto sourceCreatureId = monster->getID();
+	UPDATE_OTSYS_TIME();
+	CombatDamage damage; damage.primary = { COMBAT_PHYSICALDAMAGE, -100000 };
+	ASSERT_TRUE(g_game().combatChangeHealth(killerPlayer, monster, damage));
+	ASSERT_EQ(0, monster->getHealth());
+	monster->onDeath();
+	ASSERT_TRUE(monster->isRemoved());
+	BotLootPolicy policy { .rules = { { .itemTypeId = 3031, .valueCategory = 1, .priority = 1 } } };
+	const auto denied = manager.evaluateLoot(observerFixture.name, corpsePosition, sourceCreatureId, {}, policy);
+	EXPECT_EQ(BotLootEligibility::NoLootRights, denied.eligibility);
+	EXPECT_EQ(BotCorpseOwnership::Denied, denied.corpse.ownership);
+	EXPECT_TRUE(manager.logout(killerFixture.name, false));
+	EXPECT_TRUE(manager.logout(observerFixture.name, false));
+	ASSERT_TRUE(killerFixture.cleanup());
+	ASSERT_TRUE(observerFixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, CorpseOutsideReachableM2KnowledgeIsRejected) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position corpsePosition(fixture.start.x + 2, fixture.start.y, fixture.start.z);
+	for (int x = 0; x <= 2; ++x) for (int y = -1; y <= 1; ++y) createWalkableTile(Position(fixture.start.x + x, fixture.start.y + y, fixture.start.z));
+	for (int y = -1; y <= 1; ++y) {
+		auto wall = Item::CreateItem(1025);
+		ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(g_game().map.getTile(Position(fixture.start.x + 1, fixture.start.y + y, fixture.start.z)), wall, INDEX_WHEREEVER, FLAG_NOLIMIT));
+	}
+	auto corpse = Item::CreateItem(ITEM_MALE_CORPSE);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(g_game().map.getTile(corpsePosition), corpse, INDEX_WHEREEVER, FLAG_NOLIMIT));
+	BotManager manager(g_game());
+	ASSERT_NE(nullptr, loginBotOrReport(manager, fixture.name));
+	EXPECT_EQ(BotLootEligibility::Unreachable, manager.evaluateLoot(fixture.name, corpsePosition, 99).eligibility);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerCorpseOpeningRemainsUnchanged) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	const auto player = std::make_shared<Player>();
+	player->setName(fixture.name);
+	ASSERT_TRUE(IOLoginDataLoad::preLoadPlayer(player, fixture.name));
+	ASSERT_TRUE(IOLoginData::loadPlayerById(player, fixture.playerId, false));
+	player->setID(); player->setOnline(true);
+	ASSERT_TRUE(g_game().placeCreature(player, fixture.start, false, true));
+	auto corpse = Item::CreateItem(ITEM_MALE_CORPSE);
+	ASSERT_NE(nullptr, corpse->getContainer());
+	corpse->setAttribute(ItemAttribute_t::CORPSEOWNER, player->getID());
+	const auto tile = g_game().map.getTile(fixture.start);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(tile, corpse, INDEX_WHEREEVER, FLAG_NOLIMIT));
+	ASSERT_TRUE(g_actions().useItem(player, fixture.start, static_cast<uint8_t>(tile->getThingIndex(corpse)), corpse, false));
+	EXPECT_NE(-1, player->getContainerID(corpse->getContainer()));
+	player->setOnline(false);
+	const std::function<bool(const std::shared_ptr<Player> &)> noSave;
+	EXPECT_EQ(ManagedPlayerRemovalResult::Complete, g_game().removeManagedPlayer(player, true, noSave));
+	ASSERT_TRUE(fixture.cleanup());
+}

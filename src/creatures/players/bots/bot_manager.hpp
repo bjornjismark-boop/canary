@@ -50,6 +50,7 @@ public:
 	[[nodiscard]] BotHealingResult executeHealing(const std::string &, const BotHealingOption &, std::chrono::milliseconds, const BotSurvivalPolicy & = {});
 	[[nodiscard]] BotFleeResult executeFlee(const std::string &, std::chrono::milliseconds, const BotSurvivalPolicy & = {});
 	[[nodiscard]] BotDeathResult observeDeath(const std::string &);
+	[[nodiscard]] BotLootSelectionResult evaluateLoot(const std::string &, const Position &, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature = {}, const BotLootPolicy &policy = {});
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

@@ -10,6 +10,7 @@
 #include "creatures/players/bots/bot_combat.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/bots/bot_survival.hpp"
+#include "creatures/players/bots/bot_loot.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -55,6 +56,7 @@ public:
 	[[nodiscard]] BotDeathResult observeDeath();
 	void cancelSurvival();
 	[[nodiscard]] const BotSurvivalProgress &getSurvivalProgress() const { return survivalProgress; }
+	[[nodiscard]] BotLootSelectionResult evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature = {}, const BotLootPolicy &policy = {});
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;

@@ -198,6 +198,7 @@ BotSurvivalAssessment BotSession::evaluateSurvival(const BotSurvivalPolicy &p, s
 BotHealingResult BotSession::executeHealing(const BotHealingOption &o, std::chrono::milliseconds n, const BotSurvivalPolicy &p) { if (state != BotSessionState::Placed || !controller) return { .outcome = BotHealingOutcome::InvalidLifecycle }; return controller->executeHealing(o, n, p); }
 BotFleeResult BotSession::executeFlee(std::chrono::milliseconds n, const BotSurvivalPolicy &p) { if (state != BotSessionState::Placed || !controller) return { .outcome = BotFleeOutcome::Cancelled }; return controller->executeFlee(n, p); }
 BotDeathResult BotSession::observeDeath() { if (!controller) return { .state = BotSurvivalState::Dead }; return controller->observeDeath(); }
+BotLootSelectionResult BotSession::evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature, const BotLootPolicy &policy) { if (state != BotSessionState::Placed || !controller) return { .eligibility = BotLootEligibility::InvalidLifecycle, .failure = BotLootFailure::InvalidLifecycle }; return controller->evaluateLoot(position, sourceCreatureId, expectedSignature, policy); }
 
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {
