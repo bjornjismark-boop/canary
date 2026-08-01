@@ -583,6 +583,17 @@ retention. Complete gate: build 0, unit 624/624, integration 108/108, diff 0.
 Source commit `bcbde5e2e`. Full M9 remains open for M9C configuration/admin,
 M9D telemetry, production soak and the remaining release-hardening acceptance.
 
+M9C evidence (2026-08-01): schema-versioned JSON configuration loads atomically
+at the server boundary into immutable revisions, rejects invalid/negative/secret
+input, validates deterministic non-overlapping schedules and reports stable change
+summaries. A bounded permission-gated internal command queue provides status,
+pause, resume, drain, reload, desired population and one-member lifecycle requests
+with accepted-versus-completed results and bounded redacted audit entries. Focused
+configuration/admin evidence is 14/14 unit plus one database/world lifecycle test;
+the complete gate is build 0, unit 638/638, integration 109/109 and diff 0. Source
+commit `f6bd6b97e`. No HTTP, GUI or MyAAC code was added. Full M9 remains open for
+M9D telemetry and final production hardening.
+
 ### Mål
 
 Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
@@ -599,10 +610,10 @@ Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
 - [ ] metrics
 - [ ] watchdog
 - [x] graceful shutdown
-- [ ] server reload/restart
+- [x] server reload/restart
 - [ ] per-bot debug logging
 - [ ] soak harness
-- [ ] admin controls
+- [x] admin controls
 - [ ] allowlist för botkonton
 
 ### Acceptance
