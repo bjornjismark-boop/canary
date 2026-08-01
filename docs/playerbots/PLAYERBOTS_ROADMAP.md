@@ -570,6 +570,19 @@ retreat and fallback leadership, M4 corpse reservation and loot, generation
 invalidation, ordinary network-player isolation and teardown. Full M9 remains
 open for the fleet and production-hardening work below.
 
+M9B evidence (2026-08-01): a server-owned, disabled-by-default fleet controller
+now validates hard population and deterministic vocation, level-range, planner,
+role, coordination-group, region and party-profile distribution bounds. Bounded
+dispatcher reconciliation delegates ordinary managed login/save/logout through
+`BotManager`, applies startup delay, rate and pending limits, finite backoff,
+pause/resume/drain, session duration, overload hysteresis and generation-guarded
+shutdown. Focused evidence covers 44 deterministic policy/lifecycle cases and
+database/world fixtures cover gradual two-member placement, duplicate rejection,
+distribution intent without teleporting, safe drain, M9A cleanup and failed-save
+retention. Complete gate: build 0, unit 624/624, integration 108/108, diff 0.
+Source commit `bcbde5e2e`. Full M9 remains open for M9C configuration/admin,
+M9D telemetry, production soak and the remaining release-hardening acceptance.
+
 ### Mål
 
 Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
@@ -580,12 +593,12 @@ Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
 - [ ] follow leader
 - [x] enkla party-roller
 - [x] target- och loot-respekt
-- [ ] fleet start/stop
-- [ ] concurrency limits
+- [x] fleet start/stop
+- [x] concurrency limits
 - [ ] global tick budget
 - [ ] metrics
 - [ ] watchdog
-- [ ] graceful shutdown
+- [x] graceful shutdown
 - [ ] server reload/restart
 - [ ] per-bot debug logging
 - [ ] soak harness
