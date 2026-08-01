@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS `server_config` (
     CONSTRAINT `server_config_pk` PRIMARY KEY (`config`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-INSERT INTO `server_config` (`config`, `value`) VALUES ('db_version', '58'), ('motd_hash', ''), ('motd_num', '0'), ('players_record', '0');
+INSERT INTO `server_config` (`config`, `value`) VALUES ('db_version', '59'), ('motd_hash', ''), ('motd_num', '0'), ('players_record', '0');
 
 -- Table structure `accounts`
 CREATE TABLE IF NOT EXISTS `accounts` (
@@ -160,6 +160,28 @@ CREATE TABLE IF NOT EXISTS `players` (
     CONSTRAINT `players_account_fk`
     FOREIGN KEY (`account_id`) REFERENCES `accounts` (`id`)
     ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+CREATE TABLE IF NOT EXISTS `player_bot_planner_state` (
+    `player_id` int(11) NOT NULL,
+    `schema_version` smallint UNSIGNED NOT NULL,
+    `checkpoint_revision` bigint UNSIGNED NOT NULL,
+    `policy_revision` bigint UNSIGNED NOT NULL,
+    `goal_id` bigint UNSIGNED NOT NULL,
+    `goal_type` tinyint UNSIGNED NOT NULL,
+    `plan_revision` bigint UNSIGNED NOT NULL,
+    `verified_step_index` smallint UNSIGNED NOT NULL,
+    `verified_subsystem` tinyint UNSIGNED NOT NULL,
+    `failure_count` tinyint UNSIGNED NOT NULL,
+    `retry_count` tinyint UNSIGNED NOT NULL,
+    `configured_target_id` bigint UNSIGNED NOT NULL,
+    `region_x` smallint UNSIGNED NOT NULL,
+    `region_y` smallint UNSIGNED NOT NULL,
+    `region_z` tinyint UNSIGNED NOT NULL,
+    `safe_boundary` tinyint(1) NOT NULL,
+    `checksum` bigint UNSIGNED NOT NULL,
+    PRIMARY KEY (`player_id`),
+    CONSTRAINT `player_bot_planner_state_player_fk` FOREIGN KEY (`player_id`) REFERENCES `players` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 -- Table structure `account_bans`

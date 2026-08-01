@@ -21,6 +21,7 @@
 #include "creatures/players/bots/bot_quest_execution.hpp"
 #include "creatures/players/bots/bot_planner.hpp"
 #include "creatures/players/bots/bot_plan_execution.hpp"
+#include "creatures/players/bots/bot_planner_persistence.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -894,3 +895,42 @@ TEST(PlayerBotPlanExecutionTest,CancellationIsTerminal){EXPECT_TRUE(BotPlanExecu
 TEST(PlayerBotPlanExecutionTest,SessionCloseClearsExecutionState){auto e=BotPlanExecutor::cancel(delegatedExecution());EXPECT_FALSE(e.delegatedStep);}
 TEST(PlayerBotPlanExecutionTest,NoCallbacksRetainSession){EXPECT_FALSE(BotPlanExecution{}.containsWorldOwnership());}
 TEST(PlayerBotPlanExecutionTest,IdenticalObservationsProduceIdenticalArbitration){auto e=executionFixture();EXPECT_EQ(BotPlanExecutor::arbitrate(e,executionObservation()),BotPlanExecutor::arbitrate(e,executionObservation()));}
+
+namespace {
+BotPersistedPlanCheckpoint persistedCheckpoint(){BotPersistedPlanCheckpoint c{.playerId=10,.checkpointRevision=5,.policyRevision=1,.goalId=8,.goalType=BotGoalType::IdleSafely,.planRevision=1,.verifiedStepIndex=1,.verifiedSubsystem=BotPlanSubsystem::Observation,.safeSaveBoundary=true};c.checksum=BotPlannerPersistence::checksum(c);return c;}
+BotCheckpointValidation checkpointValidation(){return{.playerId=10,.schemaVersion=1,.policyRevision=1,.goalIds={8},.planRevisions={1},.planStepCount=3,.postconditionValid=true,.observationFresh=true};}
+BotLongCampaignBudget campaignBudget(){BotLongCampaignBudget b;b.maximumPlannerTicks=3;b.maximumCompletedGoals=8;b.maximumReplans=2;b.maximumSubsystemFailures=2;b.maximumConsecutiveIdleCycles=2;b.maximumPersistedCheckpoints=2;b.maximumSaveCycles=2;b.maximumSessionReconstructions=2;b.requiredCompletedGoals=3;return b;}
+}
+TEST(PlayerBotPlannerPersistenceTest,PersistedCheckpointContainsValuesOnly){EXPECT_FALSE(persistedCheckpoint().containsWorldOwnership());}
+TEST(PlayerBotPlannerPersistenceTest,NoWorldOwnershipIsSerializable){EXPECT_TRUE(std::is_trivially_destructible_v<BotPersistedPlanCheckpoint>);}
+TEST(PlayerBotPlannerPersistenceTest,SafeBoundaryPermitsPersistence){EXPECT_EQ(BotCheckpointLoadReason::Valid,BotPlannerPersistence::validate(persistedCheckpoint(),checkpointValidation()).reason);}
+TEST(PlayerBotPlannerPersistenceTest,PendingActionBlocksPersistence){auto e=executionFixture();e.delegatedStep=BotPlanStepExecution{};auto c=BotPlannerPersistence::capture(10,e,BotPlanSubsystem::Navigation);EXPECT_FALSE(c.safeSaveBoundary);}
+TEST(PlayerBotPlannerPersistenceTest,UnverifiedStepBlocksPersistence){auto c=persistedCheckpoint();c.safeSaveBoundary=false;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotCheckpointLoadReason::UnsafeBoundary,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
+TEST(PlayerBotPlannerPersistenceTest,SuccessfulPersistenceMarksCheckpointDurable){EXPECT_TRUE(BotPlannerPersistence::acknowledge(persistedCheckpoint(),true).durable);}
+TEST(PlayerBotPlannerPersistenceTest,FailedPersistenceDoesNotMarkDurability){EXPECT_FALSE(BotPlannerPersistence::acknowledge(persistedCheckpoint(),false).durable);}
+TEST(PlayerBotPlannerPersistenceTest,ValidCheckpointLoads){EXPECT_TRUE(BotPlannerPersistence::validate(persistedCheckpoint(),checkpointValidation()).checkpoint);}
+TEST(PlayerBotPlannerPersistenceTest,MissingCheckpointIsExplicit){EXPECT_EQ(BotCheckpointLoadReason::Missing,BotCheckpointLoadResult{}.reason);}
+TEST(PlayerBotPlannerPersistenceTest,CorruptCheckpointIsRejected){auto c=persistedCheckpoint();++c.checksum;EXPECT_EQ(BotCheckpointLoadReason::Corrupt,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
+TEST(PlayerBotPlannerPersistenceTest,UnsupportedVersionIsRejected){auto c=persistedCheckpoint();c.schemaVersion=2;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotCheckpointLoadReason::UnsupportedVersion,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
+TEST(PlayerBotPlannerPersistenceTest,PolicyRevisionMismatchIsRejected){auto c=persistedCheckpoint();c.policyRevision=2;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotCheckpointLoadReason::PolicyRevisionChanged,BotPlannerPersistence::validate(c,checkpointValidation()).reason);}
+TEST(PlayerBotPlannerPersistenceTest,MissingPlanIsRejected){auto v=checkpointValidation();v.planRevisions.clear();EXPECT_EQ(BotCheckpointLoadReason::PlanMissing,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
+TEST(PlayerBotPlannerPersistenceTest,UnavailableGoalIsRejected){auto v=checkpointValidation();v.goalIds.clear();EXPECT_EQ(BotCheckpointLoadReason::GoalUnavailable,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
+TEST(PlayerBotPlannerPersistenceTest,OutOfRangeStepIsRejected){auto v=checkpointValidation();v.planStepCount=0;EXPECT_EQ(BotCheckpointLoadReason::StepOutOfRange,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
+TEST(PlayerBotPlannerPersistenceTest,PlayerMismatchIsRejected){auto v=checkpointValidation();v.playerId=11;EXPECT_EQ(BotCheckpointLoadReason::PlayerMismatch,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
+TEST(PlayerBotPlannerPersistenceTest,InvalidPostconditionTriggersReplan){auto v=checkpointValidation();v.postconditionValid=false;EXPECT_EQ(BotCheckpointLoadReason::PostconditionInvalid,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
+TEST(PlayerBotPlannerPersistenceTest,TransientSubsystemStateIsCleared){BotCheckpointLoadResult r;EXPECT_FALSE(r.checkpoint);EXPECT_TRUE(r.freshObservationRequired);}
+TEST(PlayerBotPlannerPersistenceTest,FreshObservationsAreRequiredAfterLoad){auto v=checkpointValidation();v.observationFresh=false;EXPECT_EQ(BotCheckpointLoadReason::ObservationRequired,BotPlannerPersistence::validate(persistedCheckpoint(),v).reason);}
+TEST(PlayerBotPlannerPersistenceTest,VerifiedSafeCheckpointMayResume){EXPECT_FALSE(BotPlannerPersistence::validate(persistedCheckpoint(),checkpointValidation()).freshObservationRequired);}
+TEST(PlayerBotPlannerPersistenceTest,MaximumPlannerTicksAreEnforced){auto b=campaignBudget();b.maximumPlannerTicks=1;EXPECT_EQ(BotLongCampaignState::BudgetReached,BotPlannerPersistence::advance({},b,1,false,false,false,false,false,false,false).state);}
+TEST(PlayerBotPlannerPersistenceTest,MaximumCompletedGoalsAreEnforced){auto b=campaignBudget();b.maximumCompletedGoals=1;b.requiredCompletedGoals=3;EXPECT_EQ(BotLongCampaignState::BudgetReached,BotPlannerPersistence::advance({},b,1,true,false,false,false,false,false,false).state);}
+TEST(PlayerBotPlannerPersistenceTest,MaximumReplansAreEnforced){auto b=campaignBudget();b.maximumReplans=1;EXPECT_EQ(BotLongCampaignState::BudgetReached,BotPlannerPersistence::advance({},b,1,false,true,false,false,false,false,false).state);}
+TEST(PlayerBotPlannerPersistenceTest,MaximumFailuresAreEnforced){auto b=campaignBudget();b.maximumSubsystemFailures=1;EXPECT_EQ(BotLongCampaignState::BudgetReached,BotPlannerPersistence::advance({},b,1,false,false,true,false,false,false,false).state);}
+TEST(PlayerBotPlannerPersistenceTest,MaximumSaveCyclesAreEnforced){auto b=campaignBudget();b.maximumSaveCycles=1;EXPECT_EQ(BotLongCampaignState::BudgetReached,BotPlannerPersistence::advance({},b,1,false,false,false,false,false,true,false).state);}
+TEST(PlayerBotPlannerPersistenceTest,MaximumSessionReconstructionsAreEnforced){auto b=campaignBudget();b.maximumSessionReconstructions=1;EXPECT_EQ(BotLongCampaignState::BudgetReached,BotPlannerPersistence::advance({},b,1,false,false,false,false,false,false,true).state);}
+TEST(PlayerBotPlannerPersistenceTest,IdleLoopExhaustionTerminatesSafely){auto b=campaignBudget();b.maximumConsecutiveIdleCycles=1;EXPECT_EQ(BotLongCampaignState::BudgetReached,BotPlannerPersistence::advance({},b,1,false,false,false,true,false,false,false).state);}
+TEST(PlayerBotPlannerPersistenceTest,FailureCountersCannotOverflow){BotLongCampaignProgress p;p.subsystemFailures=UINT16_MAX;auto r=BotPlannerPersistence::advance(p,campaignBudget(),1,false,false,true,false,false,false,false);EXPECT_EQ(UINT16_MAX,r.subsystemFailures);}
+TEST(PlayerBotPlannerPersistenceTest,DiagnosticBufferIsBounded){BotPlannerDiagnostics d{.maximumEntries=2};d.record({});d.record({});d.record({});EXPECT_EQ(2,d.entries.size());}
+TEST(PlayerBotPlannerPersistenceTest,RepeatedIdenticalEventsRemainDeterministic){EXPECT_EQ(BotPlannerPersistence::advance({},campaignBudget(),1,false,false,false,false,false,false,false),BotPlannerPersistence::advance({},campaignBudget(),1,false,false,false,false,false,false,false));}
+TEST(PlayerBotPlannerPersistenceTest,TeardownClearsLoadedAndPendingCheckpointState){BotCheckpointLoadResult r{.checkpoint=persistedCheckpoint()};r.checkpoint.reset();EXPECT_FALSE(r.checkpoint);}
+TEST(PlayerBotPlannerPersistenceTest,NoGameplayStorageMutationIsUsed){EXPECT_EQ(BotCheckpointLoadReason::Valid,BotPlannerPersistence::validate(persistedCheckpoint(),checkpointValidation()).reason);}
+TEST(PlayerBotPlannerPersistenceTest,EveryUnsafeSubsystemBoundaryBlocksPersistence){auto e=executionFixture();BotCheckpointBoundary b;b.dialoguePending=true;EXPECT_FALSE(BotPlannerPersistence::capture(10,e,BotPlanSubsystem::Dialogue,b).safeSaveBoundary);b={};b.shopPending=true;EXPECT_FALSE(BotPlannerPersistence::capture(10,e,BotPlanSubsystem::Resupply,b).safeSaveBoundary);b={};b.depotPending=true;EXPECT_FALSE(BotPlannerPersistence::capture(10,e,BotPlanSubsystem::Resupply,b).safeSaveBoundary);}
