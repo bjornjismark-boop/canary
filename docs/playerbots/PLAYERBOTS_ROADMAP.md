@@ -224,7 +224,7 @@ En melee-bot ska kunna välja ett tillåtet monster, positionera sig, slåss, l�
 
 ---
 
-## [ ] M4 — Corpse Loot, Inventory och Supplies
+## [x] M4 — Corpse Loot, Inventory och Supplies
 
 ### Mål
 
@@ -235,14 +235,14 @@ Hantera corpse, loot, nästlade containers, capacity och grundläggande supplies
 - [x] corpse detection
 - [x] corpse ownership/access
 - [x] open container
-- [ ] nested `containerPath`
+- [x] nested `containerPath`
 - [x] item-ID-baserade lootregler
 - [x] stack count
 - [x] destination backpack
 - [x] capacity
-- [ ] full container
-- [ ] skydd för quest-items
-- [ ] okända items bevaras
+- [x] full container
+- [x] skydd för quest-items
+- [x] okända items bevaras
 - [x] supply counters
 - [x] jakt avbryts vid tröskel
 
@@ -264,6 +264,15 @@ ammunition- och free-capacity-trösklar ger deterministiska continue, conserve,
 stop och return intents. Verklig M3C-potionförbrukning ändrar nästa observation;
 ordinary network-player inventory förblir oförändrat. Ekonomi, shops, depot och
 equipment optimization är fortsatt deferred till M6.
+
+M4D-evidens: deterministisk carried-container traversal använder slot/index-path,
+depth 2 och container budget 16, föredrar kompatibel partial stack och därefter
+första fria slot, och skiljer full, all-full, budget, capacity, incompatible och
+stale destination. Real nested stack merge med begränsad requested count
+reconciliar source/destination, controlled corpse removal vid authoritative
+boundary rapporterar decay utan duplication, och all-full lämnar corpse och
+inventory oförändrade. Komplett gate: build 0, unit 256/256, integration 55/55,
+diff 0. M3D survival interruption ingår i den fulla M4-auditen.
 
 ### Acceptance
 
