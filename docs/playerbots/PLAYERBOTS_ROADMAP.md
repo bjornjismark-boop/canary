@@ -242,8 +242,8 @@ Hantera corpse, loot, nästlade containers, capacity och grundläggande supplies
 - [ ] full container
 - [ ] skydd för quest-items
 - [ ] okända items bevaras
-- [ ] supply counters
-- [ ] jakt avbryts vid tröskel
+- [x] supply counters
+- [x] jakt avbryts vid tröskel
 
 M4A-evidens: value-only corpse-signaturer observerar verklig monsterdöd, decay,
 synlighet, M2-nåbarhet, loot-rights, top-level containerinnehåll, stack counts och
@@ -257,13 +257,20 @@ deltas verifieras före success; capacity preflight, stale signatures, decay,
 en pending action och teardown normaliseras med
 value-only state. Nested `containerPath` och supply decisions återstår.
 
+M4C-evidens: utrustade och burna supplies observeras som bounded value-only
+item-ID-, count-, charge-, depth- och capacity-data. Konfigurerade healing-,
+ammunition- och free-capacity-trösklar ger deterministiska continue, conserve,
+stop och return intents. Verklig M3C-potionförbrukning ändrar nästa observation;
+ordinary network-player inventory förblir oförändrat. Ekonomi, shops, depot och
+equipment optimization är fortsatt deferred till M6.
+
 ### Acceptance
 
 - [x] corpse öppnas genom normal serveraction;
 - [x] konfigurerat loot flyttas till rätt container;
 - [x] otillräcklig capacity hanteras utan loop;
 - [x] protected och unknown items säljs eller kastas inte;
-- [ ] supply- och capacity-trösklar kan stoppa jakten.
+- [x] supply- och capacity-trösklar kan stoppa jakten.
 
 ---
 
