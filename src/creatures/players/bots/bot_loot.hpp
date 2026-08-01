@@ -94,8 +94,8 @@ public:
 
 enum class BotLootExecutionState : uint8_t { Idle, ApproachingCorpse, OpeningCorpse, ObservingContents, SelectingItem, TransferPending, VerifyingTransfer, CorpseEmpty, CapacityBlocked, Completed, RetryBackoff, Failed, Cancelled };
 enum class BotLootPriorityState : uint8_t { LootActive, SurvivalInterruptRequested, WaitingForAuthoritativeBoundary, LootSuspended, HealingPriority, FleePriority, DeathOverride, FreshObservationRequired, LootResumeAllowed, LootAbandoned };
-enum class BotLootTransferOutcome : uint8_t { Succeeded, Partial, Pending, NoEffect, CorpseOpened, AlreadyOpen, CapacityInsufficient, DestinationFull, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryScheduled, RetryExhausted, Cancelled };
-enum class BotLootTransferFailure : uint8_t { None, InvalidLifecycle, CapacityInsufficient, DestinationFull, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryExhausted, Cancelled };
+enum class BotLootTransferOutcome : uint8_t { Succeeded, Partial, Pending, NoEffect, CorpseOpened, AlreadyOpen, CapacityInsufficient, DestinationFull, AllDestinationsFull, DestinationBudgetExceeded, ItemIncompatible, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryScheduled, RetryExhausted, Cancelled };
+enum class BotLootTransferFailure : uint8_t { None, InvalidLifecycle, CapacityInsufficient, DestinationFull, AllDestinationsFull, DestinationBudgetExceeded, ItemIncompatible, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryExhausted, Cancelled };
 
 struct BotInventorySlotObservation {
 	uint8_t slot = 0;
@@ -107,11 +107,14 @@ struct BotInventorySlotObservation {
 };
 
 struct BotContainerObservation {
+	uint8_t rootSlot = 0;
+	std::vector<uint16_t> childIndices;
 	uint16_t itemTypeId = 0;
 	uint16_t capacity = 0;
 	uint16_t size = 0;
 	uint8_t depth = 0;
 	uint64_t signature = 0;
+	std::vector<BotLootItemObservation> items;
 	auto operator<=>(const BotContainerObservation &) const = default;
 };
 
@@ -122,7 +125,20 @@ struct BotInventoryObservation {
 	std::vector<BotInventorySlotObservation> slots;
 	std::vector<BotContainerObservation> containers;
 	bool containsWorldOwnership = false;
+	bool containerBudgetExceeded = false;
 	auto operator<=>(const BotInventoryObservation &) const = default;
+};
+
+enum class BotDestinationOutcome : uint8_t { SelectedMerge, SelectedFreeSlot, DestinationBudgetExceeded, SelectedContainerFull, AllDestinationsFull, CapacityInsufficient, ItemIncompatible, StaleDestination, NoValidDestination };
+struct BotDestinationSelection {
+	BotDestinationOutcome outcome = BotDestinationOutcome::NoValidDestination;
+	uint8_t rootSlot = 0;
+	std::vector<uint16_t> childIndices;
+	uint16_t slot = 0;
+	uint64_t containerSignature = 0;
+	uint32_t mergeCount = 0;
+	[[nodiscard]] bool selected() const { return outcome == BotDestinationOutcome::SelectedMerge || outcome == BotDestinationOutcome::SelectedFreeSlot; }
+	auto operator<=>(const BotDestinationSelection &) const = default;
 };
 
 struct BotCapacityAssessment {
@@ -141,6 +157,8 @@ struct BotLootTransferRequest {
 	uint64_t itemSignature = 0;
 	uint32_t count = 0;
 	uint64_t destinationSignature = 0;
+	uint8_t destinationRootSlot = 0;
+	std::vector<uint16_t> destinationChildIndices;
 	auto operator<=>(const BotLootTransferRequest &) const = default;
 };
 
@@ -166,6 +184,8 @@ struct BotLootTransferResult {
 	uint8_t attempts = 0;
 	bool ordinaryOpenAccepted = false;
 	bool ordinaryMoveDispatched = false;
+	bool mergedStack = false;
+	bool createdStack = false;
 };
 
 struct BotLootExecutionProgress {
@@ -184,11 +204,13 @@ struct BotLootExecutionProgress {
 	bool freshInventoryRequired = false;
 	BotLootTransferOutcome authoritativeBoundaryOutcome = BotLootTransferOutcome::Pending;
 	uint32_t authoritativeBoundaryMovedCount = 0;
+	BotDestinationSelection chosenDestination;
 };
 
 class BotLootTransfer final {
 public:
 	static BotInventoryObservation observeInventory(const std::shared_ptr<Player> &player, uint8_t maxContainers = 16, uint8_t maxDepth = 2);
+	static BotDestinationSelection selectDestination(const BotInventoryObservation &, uint16_t itemTypeId, uint32_t requestedCount);
 	static BotCapacityAssessment assessCapacity(uint32_t freeCapacity, uint32_t unitWeight, uint32_t requestedCount);
 	static std::chrono::milliseconds retryDelay(uint8_t attempt, const BotLootTransferPolicy &policy);
 	static bool legalTransition(BotLootExecutionState from, BotLootExecutionState to);

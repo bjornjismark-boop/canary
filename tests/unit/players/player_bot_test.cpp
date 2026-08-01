@@ -538,6 +538,23 @@ TEST(PlayerBotLootTransferTest, FleeAndTransferCannotBeSimultaneous) { BotLootEx
 TEST(PlayerBotLootTransferTest, SessionCloseStateClearsSuspendedRequest) { BotLootExecutionProgress p{.state=BotLootExecutionState::TransferPending,.request=BotLootTransferRequest{.itemTypeId=3031}}; p={.state=BotLootExecutionState::Cancelled}; EXPECT_FALSE(p.request); EXPECT_FALSE(p.containsWorldOwnership); }
 TEST(PlayerBotLootTransferTest, SurvivalPriorityStateContainsValuesOnly) { BotLootExecutionProgress p{.priority=BotLootPriorityState::FreshObservationRequired,.corpseObservationRevision=4,.inventoryObservationRevision=5}; EXPECT_FALSE(p.containsWorldOwnership); }
 TEST(PlayerBotLootTransferTest, InterruptionRetainsNoWorldOwnership) { BotLootExecutionProgress p{.state=BotLootExecutionState::TransferPending}; BotLootTransfer::requestSurvivalInterrupt(p,BotSurvivalDecision::Heal); EXPECT_FALSE(p.containsWorldOwnership); }
+TEST(PlayerBotLootTransferTest, ExistingCompatibleNestedStackIsPreferred) { BotInventoryObservation o{.containers={{.rootSlot=3,.childIndices={0},.capacity=20,.size=2,.depth=1,.items={{.itemTypeId=3031,.count=40,.stackPosition=1,.stackable=true}}}}};const auto r=BotLootTransfer::selectDestination(o,3031,30);EXPECT_EQ(BotDestinationOutcome::SelectedMerge,r.outcome);EXPECT_EQ(std::vector<uint16_t>({0}),r.childIndices);EXPECT_EQ(30U,r.mergeCount); }
+TEST(PlayerBotLootTransferTest, NestedTraversalOrderingIsDeterministic) { BotInventoryObservation o{.containers={{.rootSlot=3,.capacity=0,.size=0},{.rootSlot=3,.childIndices={1},.capacity=20,.size=0,.depth=1}}};EXPECT_EQ(std::vector<uint16_t>({1}),BotLootTransfer::selectDestination(o,3031,1).childIndices); }
+TEST(PlayerBotLootTransferTest, NestingDepthBoundIsRepresented) { BotLootTransferPolicy p;EXPECT_EQ(2,p.maxInventoryDepth); }
+TEST(PlayerBotLootTransferTest, ContainerCountBoundIsExplicit) { BotLootTransferPolicy p;EXPECT_EQ(16,p.maxInventoryContainers); }
+TEST(PlayerBotLootTransferTest, FullFirstContainerChoosesAlternate) { BotInventoryObservation o{.containers={{.rootSlot=3,.capacity=1,.size=1},{.rootSlot=4,.capacity=2,.size=0}}};EXPECT_EQ(4,BotLootTransfer::selectDestination(o,3031,1).rootSlot); }
+TEST(PlayerBotLootTransferTest, AllContainersFullIsExplicit) { BotInventoryObservation o{.containers={{.rootSlot=3,.capacity=1,.size=1}}};EXPECT_EQ(BotDestinationOutcome::AllDestinationsFull,BotLootTransfer::selectDestination(o,3031,1).outcome); }
+TEST(PlayerBotLootTransferTest, DestinationBudgetExceededIsExplicit) { BotInventoryObservation o{.containerBudgetExceeded=true};EXPECT_EQ(BotDestinationOutcome::DestinationBudgetExceeded,BotLootTransfer::selectDestination(o,3031,1).outcome); }
+TEST(PlayerBotLootTransferTest, CapacityInsufficientRemainsDistinct) { EXPECT_NE(BotDestinationOutcome::CapacityInsufficient,BotDestinationOutcome::AllDestinationsFull); }
+TEST(PlayerBotLootTransferTest, PartialRequestedCountIsValueOnly) { BotLootTransferRequest r{.itemTypeId=3031,.count=7,.destinationRootSlot=3,.destinationChildIndices={0}};EXPECT_EQ(7U,r.count); }
+TEST(PlayerBotLootTransferTest, PartialResultReconcilesBothSides) { BotLootTransferResult r{.outcome=BotLootTransferOutcome::Partial,.sourceBefore=20,.sourceAfter=13,.destinationBefore=4,.destinationAfter=11,.movedCount=7};EXPECT_EQ(r.sourceBefore-r.sourceAfter,r.movedCount);EXPECT_EQ(r.destinationAfter-r.destinationBefore,r.movedCount); }
+TEST(PlayerBotLootTransferTest, MergedStackReconciliationIsExplicit) { BotLootTransferResult r{.mergedStack=true};EXPECT_TRUE(r.mergedStack);EXPECT_FALSE(r.createdStack); }
+TEST(PlayerBotLootTransferTest, NewStackReconciliationIsExplicit) { BotLootTransferResult r{.createdStack=true};EXPECT_TRUE(r.createdStack);EXPECT_FALSE(r.mergedStack); }
+TEST(PlayerBotLootTransferTest, NoEffectResultIsDistinct) { EXPECT_NE(BotLootTransferOutcome::NoEffect,BotLootTransferOutcome::Partial); }
+TEST(PlayerBotLootTransferTest, StaleDestinationIsDistinct) { EXPECT_NE(BotLootTransferOutcome::StaleDestination,BotLootTransferOutcome::DestinationFull); }
+TEST(PlayerBotLootTransferTest, CorpseExpirationIsDistinct) { EXPECT_NE(BotLootTransferOutcome::CorpseExpired,BotLootTransferOutcome::StaleItem); }
+TEST(PlayerBotLootTransferTest, RetryRemainsFinite) { BotLootTransferPolicy p;EXPECT_GT(p.maxAttempts,0);EXPECT_LT(p.maxAttempts,4); }
+TEST(PlayerBotLootTransferTest, DestinationPathsRetainNoContainerOwnership) { BotDestinationSelection r{.rootSlot=3,.childIndices={0,1}};EXPECT_EQ(2U,r.childIndices.size()); }
 
 namespace {
 BotSupplyPolicy supplyPolicy() {

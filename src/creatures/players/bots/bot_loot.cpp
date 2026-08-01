@@ -205,28 +205,43 @@ BotInventoryObservation BotLootTransfer::observeInventory(const std::shared_ptr<
 	if (!player) return result;
 	result.revision = static_cast<uint64_t>(OTSYS_TIME());
 	result.freeCapacity = player->getFreeCapacity();
-	std::vector<std::pair<std::shared_ptr<Container>, uint8_t>> pending;
+	struct PendingContainer { std::shared_ptr<Container> container; uint8_t depth = 0; uint8_t rootSlot = 0; std::vector<uint16_t> childIndices; };
+	std::vector<PendingContainer> pending;
 	for (uint8_t slot = CONST_SLOT_FIRST; slot <= CONST_SLOT_LAST; ++slot) {
 		const auto item = player->getInventoryItem(static_cast<Slots_t>(slot));
 		if (!item) continue;
 		BotInventorySlotObservation observed { .slot = slot, .itemTypeId = item->getID(), .count = std::max<uint16_t>(item->getItemCount(), 1), .container = item->getContainer() != nullptr };
 		observed.signature = mix(mix(mix(1469598103934665603ULL, slot), observed.itemTypeId), observed.count);
 		result.slots.push_back(observed);
-		if (const auto container = item->getContainer(); container && pending.size() < maxContainers) pending.emplace_back(container, 0);
+		if (const auto container = item->getContainer()) pending.push_back({container,0,slot,{}});
 	}
 	for (size_t index = 0; index < pending.size() && result.containers.size() < maxContainers; ++index) {
-		const auto &[container, depth] = pending[index];
+		const auto current = pending[index];
+		const auto &container = current.container;
+		const auto depth = current.depth;
+		const auto rootSlot = current.rootSlot;
+		const auto childIndices = current.childIndices;
 		if (!container) continue;
-		BotContainerObservation observed { .itemTypeId = container->getID(), .capacity = static_cast<uint16_t>(std::min<uint32_t>(container->capacity(), UINT16_MAX)), .size = static_cast<uint16_t>(std::min<size_t>(container->size(), UINT16_MAX)), .depth = depth };
+		BotContainerObservation observed { .rootSlot=rootSlot,.childIndices=childIndices,.itemTypeId = container->getID(), .capacity = static_cast<uint16_t>(std::min<uint32_t>(container->capacity(), UINT16_MAX)), .size = static_cast<uint16_t>(std::min<size_t>(container->size(), UINT16_MAX)), .depth = depth };
 		observed.signature = mix(mix(mix(1469598103934665603ULL, observed.itemTypeId), observed.capacity), observed.size);
+		for (size_t itemIndex=0; itemIndex<container->getItemList().size(); ++itemIndex) { const auto &item=container->getItemList()[itemIndex]; if(!item)continue; BotLootItemObservation value{.itemTypeId=item->getID(),.count=std::max<uint16_t>(item->getItemCount(),1),.stackPosition=static_cast<uint16_t>(itemIndex),.depth=depth,.stackable=item->isStackable(),.nestedContainer=item->getContainer()!=nullptr}; value.signature=mix(mix(mix(1469598103934665603ULL,value.itemTypeId),value.count),value.stackPosition); observed.items.push_back(value); }
 		result.containers.push_back(observed);
 		if (depth >= maxDepth) continue;
-		for (const auto &item : container->getItemList()) {
-			if (const auto child = item ? item->getContainer() : nullptr; child && pending.size() < maxContainers) pending.emplace_back(child, static_cast<uint8_t>(depth + 1));
+		for (size_t childIndex=0; childIndex<container->getItemList().size(); ++childIndex) {
+			const auto &item=container->getItemList()[childIndex]; if (const auto child = item ? item->getContainer() : nullptr) { auto path=childIndices; path.push_back(static_cast<uint16_t>(childIndex)); pending.push_back({child,static_cast<uint8_t>(depth+1),rootSlot,std::move(path)}); }
 		}
 	}
+	result.containerBudgetExceeded = pending.size() > maxContainers;
 	uint64_t signature=1469598103934665603ULL;signature=mix(signature,result.freeCapacity);for(const auto &slot:result.slots)signature=mix(signature,slot.signature);for(const auto &container:result.containers)signature=mix(signature,container.signature);result.signature=signature;
 	return result;
+}
+
+BotDestinationSelection BotLootTransfer::selectDestination(const BotInventoryObservation &inventory, uint16_t itemTypeId, uint32_t requestedCount) {
+	if (itemTypeId == 0 || requestedCount == 0) return { .outcome=BotDestinationOutcome::ItemIncompatible };
+	for (const auto &container : inventory.containers) for (const auto &item : container.items) if (item.itemTypeId == itemTypeId && item.stackable && item.count < 100) return { .outcome=BotDestinationOutcome::SelectedMerge,.rootSlot=container.rootSlot,.childIndices=container.childIndices,.slot=item.stackPosition,.containerSignature=container.signature,.mergeCount=std::min<uint32_t>(requestedCount,100-item.count) };
+	for (const auto &container : inventory.containers) if (container.size < container.capacity) return { .outcome=BotDestinationOutcome::SelectedFreeSlot,.rootSlot=container.rootSlot,.childIndices=container.childIndices,.slot=container.size,.containerSignature=container.signature };
+	if (inventory.containerBudgetExceeded) return { .outcome=BotDestinationOutcome::DestinationBudgetExceeded };
+	return { .outcome=inventory.containers.empty()?BotDestinationOutcome::NoValidDestination:BotDestinationOutcome::AllDestinationsFull };
 }
 
 BotCapacityAssessment BotLootTransfer::assessCapacity(uint32_t freeCapacity, uint32_t unitWeight, uint32_t requestedCount) {
