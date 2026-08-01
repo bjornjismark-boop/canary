@@ -128,6 +128,10 @@ BotFleetLocalSoakAdapter::BotFleetLocalSoakAdapter(std::filesystem::path output,
 void BotFleetLocalSoakAdapter::sample(const dispatcher::telemetry::LatencySnapshot &latency, uint64_t timestampMilliseconds) {
 	if (!enabled) return;
 	const auto snapshot = telemetry.collect(manager, administration);
+	json managedMembers = json::array();
+	for (const auto &member : manager.managedSessionIdentities()) {
+		managedMembers.push_back({ { "id", member.memberId }, { "name", member.name }, { "generation", member.sessionGeneration }, { "authoritativelyPlaced", member.authoritativelyPlaced } });
+	}
 	json fleet {
 		{ "timestampMilliseconds", timestampMilliseconds }, { "snapshotRevision", snapshot->sequence },
 		{ "configurationRevision", snapshot->policyRevision }, { "desiredPopulation", snapshot->desiredPopulation },
@@ -144,11 +148,21 @@ void BotFleetLocalSoakAdapter::sample(const dispatcher::telemetry::LatencySnapsh
 		{ "duplicateSessions", snapshot->duplicateSessions }, { "lifecycleQueueDepth", snapshot->pendingLogins + snapshot->pendingLogouts },
 		{ "commandQueueDepth", snapshot->queuedCommands }, { "coordinationGroups", snapshot->coordinationGroups },
 		{ "coordinationReservations", snapshot->coordinationReservations },
-		{ "controllerState", static_cast<uint8_t>(snapshot->controllerState) }, { "pressureState", static_cast<uint8_t>(snapshot->pressureState) }
+		{ "controllerState", static_cast<uint8_t>(snapshot->controllerState) }, { "pressureState", static_cast<uint8_t>(snapshot->pressureState) },
+		{ "managedMembers", std::move(managedMembers) }
 	};
 	std::ofstream fleetOutput(directory / "fleet-snapshots.jsonl", std::ios::app);
 	if (!fleetOutput) { enabled = false; return; }
 	fleetOutput << fleet.dump() << '\n';
+	std::ofstream lifecycleOutput(directory / "managed-lifecycle.jsonl", std::ios::app);
+	if (!lifecycleOutput) { enabled = false; return; }
+	for (const auto &event : manager.managedSessionEventsAfter(lifecycleEventSequence)) {
+		const auto action = event.action == BotManagedSessionAction::Login ? "login" : event.action == BotManagedSessionAction::Logout ? "logout" : "unexpected_loss";
+		const auto reason = event.reason == BotManagedSessionReason::Reconciliation ? "reconciliation" : event.reason == BotManagedSessionReason::Shutdown ? "shutdown" : event.reason == BotManagedSessionReason::WorldRemoval ? "world_removal" : "explicit";
+		lifecycleOutput << json { { "timestampMilliseconds", timestampMilliseconds }, { "sequence", event.sequence }, { "action", action }, { "reason", reason },
+		                         { "memberId", event.memberId }, { "name", event.name }, { "sessionGeneration", event.sessionGeneration } }.dump() << '\n';
+		lifecycleEventSequence = event.sequence;
+	}
 	json ticks {
 		{ "timestampMilliseconds", timestampMilliseconds }, { "samples", latency.samples },
 		{ "bucketUpperBoundsUs", dispatcher::telemetry::LATENCY_BUCKET_UPPER_BOUNDS_US }, { "buckets", latency.buckets },

@@ -36,7 +36,7 @@ ARTIFACTS = (
     "client.log", "events.jsonl", "fleet-snapshots.jsonl", "sessions.csv", "rss.csv",
     "ticks.csv", "commands.jsonl", "restarts.jsonl", "faults.json", "invariants.json",
     "summary.json", "summary.md", "ticks.jsonl", "command-requests.jsonl",
-    "ordinary-client-ready.txt",
+    "ordinary-client-ready.txt", "managed-lifecycle.jsonl",
 )
 
 
@@ -189,6 +189,81 @@ def validate_snapshot(s: dict[str, Any], bots: int) -> list[str]:
     if s.get("lifecycleQueueDepth", 0) > max(64, bots * 4): failures.append("unbounded_lifecycle_queue")
     if s.get("commandQueueDepth", 0) > 64: failures.append("unbounded_command_queue")
     return failures
+
+
+@dataclass
+class ManagedLifecycleMonitor:
+    event_lines: int = 0
+    seen_generations: dict[int, int] = None
+    active_members: set[int] = None
+    managed_ping_timeouts: int = 0
+    unexpected_logouts: int = 0
+    unexpected_logins: int = 0
+    unscheduled_replacements: int = 0
+    affected: set[str] = None
+
+    def __post_init__(self) -> None:
+        self.seen_generations = {} if self.seen_generations is None else self.seen_generations
+        self.active_members = set() if self.active_members is None else self.active_members
+        self.affected = set() if self.affected is None else self.affected
+
+    def observe(self, directory: Path, restart_window: bool = False) -> list[str]:
+        failures: list[str] = []
+        path = directory / "managed-lifecycle.jsonl"
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        if len(lines) < self.event_lines: return ["managed_lifecycle_truncated"]
+        for line in lines[self.event_lines:]:
+            try: event = json.loads(line)
+            except json.JSONDecodeError: failures.append("malformed_managed_lifecycle_event"); continue
+            member_id = event.get("memberId"); generation = event.get("sessionGeneration")
+            identity = f"{member_id}:{event.get('name', '')}"
+            if not isinstance(member_id, int) or not isinstance(generation, int):
+                failures.append("malformed_managed_lifecycle_event"); continue
+            action, reason = event.get("action"), event.get("reason")
+            if reason == "ping_timeout": self.managed_ping_timeouts += 1; self.affected.add(identity); failures.append("managed_ping_timeout")
+            if action == "login":
+                previous = self.seen_generations.get(member_id)
+                if previous is not None and not restart_window:
+                    self.unexpected_logins += 1; self.affected.add(identity); failures.append("unexpected_managed_login")
+                    if previous != generation:
+                        self.unscheduled_replacements += 1; failures.append("unscheduled_session_replacement")
+                self.seen_generations[member_id] = generation; self.active_members.add(member_id)
+            elif action in ("logout", "unexpected_loss"):
+                # The old process can report either its orderly manager drain or
+                # world removal while the controlled SIGTERM is in progress.
+                expected = restart_window
+                # A world-removal logout is the deterministic cleanup companion
+                # to the preceding unexpected_loss event, not a second loss.
+                companion_cleanup = action == "logout" and reason == "world_removal"
+                if not expected and not companion_cleanup:
+                    self.unexpected_logouts += 1; self.affected.add(identity); failures.append("unexpected_managed_logout")
+                if action == "unexpected_loss" and not restart_window:
+                    self.unscheduled_replacements += 1; failures.append("population_churn_hidden_by_reconciliation")
+                self.active_members.discard(member_id)
+        self.event_lines = len(lines)
+
+        snapshots = (directory / "fleet-snapshots.jsonl").read_text(encoding="utf-8").splitlines()
+        if snapshots:
+            try: latest = json.loads(snapshots[-1])
+            except json.JSONDecodeError: return failures + ["malformed_fleet_snapshot"]
+            members = latest.get("managedMembers")
+            if not isinstance(members, list): return failures + ["managed_member_identities_missing"]
+            current: set[int] = set()
+            for member in members:
+                if not isinstance(member, dict) or not isinstance(member.get("id"), int) or not isinstance(member.get("generation"), int):
+                    failures.append("malformed_managed_member_identity"); continue
+                member_id, generation = member["id"], member["generation"]
+                current.add(member_id)
+                previous = self.seen_generations.get(member_id)
+                if previous is not None and previous != generation and not restart_window:
+                    self.unscheduled_replacements += 1; self.affected.add(str(member_id)); failures.append("unscheduled_session_replacement")
+                self.seen_generations[member_id] = generation
+                if not member.get("authoritativelyPlaced", False) and not restart_window: failures.append("managed_session_not_authoritatively_placed")
+            missing = self.active_members - current
+            if missing and not restart_window:
+                self.unexpected_logouts += len(missing); self.affected.update(map(str, missing)); failures.append("population_churn_hidden_by_reconciliation")
+            self.active_members = current
+        return sorted(set(failures))
 
 
 def check_loopback_config(path: Path) -> None:
@@ -434,6 +509,8 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = 1
     client: subprocess.Popen[bytes] | None = None
     cleanup_complete = False
+    lifecycle = ManagedLifecycleMonitor()
+    invariant_failures: list[str] = []
     try:
         (directory / "environment-redacted.json").write_text(json.dumps(redact(env), indent=2) + "\n", encoding="utf-8")
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -466,12 +543,29 @@ def main(argv: list[str] | None = None) -> int:
             deadline = time.monotonic() + args.duration_seconds
             while time.monotonic() < deadline:
                 if client and client.poll() is not None: raise SoakError("ordinary protocol client terminated unexpectedly")
-                run.sample(writer); rss_file.flush(); time.sleep(args.sample_seconds)
+                run.sample(writer); rss_file.flush()
+                current_failures = lifecycle.observe(directory)
+                if current_failures:
+                    invariant_failures.extend(current_failures)
+                    raise SoakError("managed lifecycle invariant failure: " + ",".join(current_failures))
+                time.sleep(args.sample_seconds)
             for restart in range(args.restarts):
                 if client:
                     client.terminate(); client.wait(timeout=10); client=None
-                run.stop(); run.start(); client=start_client(); time.sleep(min(3.0,args.sample_seconds * 2)); run.sample(writer)
-                if client and client.poll() is not None: raise SoakError("ordinary protocol client failed to reconnect")
+                run.stop(); run.start(); client=start_client()
+                restart_deadline = time.monotonic() + max(120, args.bots * 8 + 60)
+                while time.monotonic() < restart_deadline:
+                    if client and client.poll() is not None: raise SoakError("ordinary protocol client failed to reconnect")
+                    run.sample(writer); rss_file.flush()
+                    current_failures = lifecycle.observe(directory, restart_window=True)
+                    if current_failures:
+                        invariant_failures.extend(current_failures)
+                        raise SoakError("managed restart lifecycle invariant failure: " + ",".join(current_failures))
+                    snapshots = (directory / "fleet-snapshots.jsonl").read_text(encoding="utf-8").splitlines()
+                    latest = json.loads(snapshots[-1]) if snapshots else {}
+                    if latest.get("managedSessions") == args.bots and latest.get("placed") == args.bots: break
+                    time.sleep(args.sample_seconds)
+                else: raise SoakError("managed fleet did not recover after controlled restart")
                 with (directory/"restarts.jsonl").open("a",encoding="utf-8") as output:
                     output.write(json.dumps({"timestamp":utc(),"restart":restart+1,"result":"PASS"})+"\n")
                 run.event("restart_completed", restart=restart + 1)
@@ -491,6 +585,16 @@ def main(argv: list[str] | None = None) -> int:
             except Exception: pass
     finally:
         client_environment.unlink(missing_ok=True)
+        # Always publish a valid invariant document, including signal and cleanup failures.
+        try:
+            _, final_invariant_failures = evaluate_adapter_artifacts(directory, args.bots)
+            invariant_failures = sorted(set(invariant_failures + final_invariant_failures))
+            invariant_document = json.loads((directory / "invariants.json").read_text(encoding="utf-8"))
+            invariant_document["failures"] = invariant_failures
+            (directory / "invariants.json").write_text(json.dumps(invariant_document, indent=2) + "\n", encoding="utf-8")
+        except Exception as exc:
+            invariant_failures = sorted(set(invariant_failures + [f"invariant_evaluation_failed:{type(exc).__name__}"]))
+            (directory / "invariants.json").write_text(json.dumps({"evaluations": [], "failures": invariant_failures}, indent=2) + "\n", encoding="utf-8")
         rss_values=[]
         try:
             with (directory/"rss.csv").open(newline="",encoding="utf-8") as source:
@@ -514,6 +618,9 @@ def main(argv: list[str] | None = None) -> int:
                    "tickP95Us":merged_histogram_percentile(tick_values,.95) if tick_values and sum(item["samples"] for item in tick_values) else None,
                    "tickP99Us":merged_histogram_percentile(tick_values,.99) if tick_values and sum(item["samples"] for item in tick_values) else None,
                    "tickMaxUs":max((item["maxUs"] for item in tick_values),default=None), "productionSoak": False,
+                   "managedPingTimeouts":lifecycle.managed_ping_timeouts,"unexpectedManagedLogouts":lifecycle.unexpected_logouts,
+                   "unexpectedManagedLogins":lifecycle.unexpected_logins,"unscheduledSessionReplacements":lifecycle.unscheduled_replacements,
+                   "affectedManagedBots":sorted(lifecycle.affected),"invariantFailureCount":len(invariant_failures),
                    "mode":"live_mixed" if env.get("SOAK_CLIENT_COMMAND") else "live_server_only",
                    "cleanup":"PASS" if cleanup_complete else "FAIL",
                    "releaseSoak": "NOT_RUN",

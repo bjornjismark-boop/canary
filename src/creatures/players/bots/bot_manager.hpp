@@ -20,6 +20,25 @@
 class Game;
 class Player;
 
+enum class BotManagedSessionAction : uint8_t { Login, Logout, UnexpectedLoss };
+enum class BotManagedSessionReason : uint8_t { Explicit, Reconciliation, Shutdown, WorldRemoval };
+
+struct BotManagedSessionEvent {
+	uint64_t sequence = 0;
+	BotManagedSessionAction action = BotManagedSessionAction::Login;
+	BotManagedSessionReason reason = BotManagedSessionReason::Explicit;
+	BotFleetMemberId memberId = 0;
+	uint64_t sessionGeneration = 0;
+	std::string name;
+};
+
+struct BotManagedSessionIdentity {
+	BotFleetMemberId memberId = 0;
+	uint64_t sessionGeneration = 0;
+	std::string name;
+	bool authoritativelyPlaced = false;
+};
+
 class BotManager final {
 public:
 	// Game owns the world registries used during cleanup and must outlive BotManager.
@@ -31,8 +50,8 @@ public:
 	BotManager(const BotManager &) = delete;
 	BotManager &operator=(const BotManager &) = delete;
 
-	[[nodiscard]] std::shared_ptr<const BotSession> login(const std::string &name);
-	[[nodiscard]] bool logout(const std::string &name, bool savePlayer = true);
+	[[nodiscard]] std::shared_ptr<const BotSession> login(const std::string &name, BotManagedSessionReason reason = BotManagedSessionReason::Explicit);
+	[[nodiscard]] bool logout(const std::string &name, bool savePlayer = true, BotManagedSessionReason reason = BotManagedSessionReason::Explicit);
 	[[nodiscard]] ReturnValue move(const std::string &name, Direction direction);
 	[[nodiscard]] BotWalkabilityResult assess(const std::string &name, Direction direction) const;
 	[[nodiscard]] BotActionResult executeMovement(const std::string &name, const BotWalkabilityResult &assessment, std::chrono::milliseconds now);
@@ -100,6 +119,8 @@ public:
 	[[nodiscard]] const std::unordered_map<BotFleetMemberId, BotFleetObservation> &fleetObservations() const { return fleetLifecycle; }
 	[[nodiscard]] size_t fleetMemberCount() const { return fleetMembers.size(); }
 	[[nodiscard]] uint32_t ordinaryPlayerCount() const;
+	[[nodiscard]] std::vector<BotManagedSessionIdentity> managedSessionIdentities() const;
+	[[nodiscard]] std::vector<BotManagedSessionEvent> managedSessionEventsAfter(uint64_t sequence) const;
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();
@@ -111,6 +132,8 @@ private:
 	std::unordered_map<std::string, std::shared_ptr<BotSession>> sessions;
 	std::unordered_map<BotCoordinationGroupId, BotCoordinationGroupState> coordinationGroups;
 	std::unordered_map<BotCoordinationMemberId, uint64_t> sessionGenerations;
+	std::deque<BotManagedSessionEvent> managedSessionEvents;
+	uint64_t managedSessionEventSequence = 0;
 	BotFleetPopulationPolicy fleetPopulation;
 	BotFleetDistributionPolicy fleetDistribution;
 	std::vector<BotFleetMemberProfile> fleetMembers;
@@ -126,4 +149,5 @@ private:
 	uint32_t fleetIntervalTicks = 1000;
 	void scheduleFleetReconciliation();
 	void executeFleetReconciliation();
+	void recordManagedSessionEvent(BotManagedSessionAction, BotManagedSessionReason, BotFleetMemberId, uint64_t, std::string);
 };

@@ -140,6 +140,7 @@ private:
 	BotFleetAdministration &administration;
 	BotFleetTelemetry &telemetry;
 	uintmax_t commandOffset = 0;
+	uint64_t lifecycleEventSequence = 0;
 	std::deque<uint64_t> requestIds;
 	bool enabled = false;
 };

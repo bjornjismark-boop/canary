@@ -44,7 +44,7 @@ BotManager::~BotManager() noexcept {
 	}
 }
 
-std::shared_ptr<const BotSession> BotManager::login(const std::string &name) {
+std::shared_ptr<const BotSession> BotManager::login(const std::string &name, BotManagedSessionReason reason) {
 	const auto key = asLowerCaseString(name);
 	if (key.empty()) {
 		g_logger().warn("[BotManager::login] Rejected bot login with an empty name");
@@ -73,10 +73,11 @@ std::shared_ptr<const BotSession> BotManager::login(const std::string &name) {
 	if (generation != std::numeric_limits<uint64_t>::max()) {
 		++generation;
 	}
+	recordManagedSessionEvent(BotManagedSessionAction::Login, reason, session->player->getGUID(), generation, session->player->getName());
 	return session;
 }
 
-bool BotManager::logout(const std::string &name, bool savePlayer) {
+bool BotManager::logout(const std::string &name, bool savePlayer, BotManagedSessionReason reason) {
 	const auto it = sessions.find(asLowerCaseString(name));
 	if (it == sessions.end()) {
 		return false;
@@ -89,6 +90,7 @@ bool BotManager::logout(const std::string &name, bool savePlayer) {
 		(void)groupId;
 		BotCoordination::invalidate(group.reservations, memberId);
 	}
+	recordManagedSessionEvent(BotManagedSessionAction::Logout, reason, memberId, sessionGenerations[memberId], name);
 	sessions.erase(it);
 	return true;
 }
@@ -160,6 +162,7 @@ bool BotManager::clear(bool savePlayers) {
 				(void)groupId;
 				BotCoordination::invalidate(group.reservations, memberId);
 			}
+			recordManagedSessionEvent(BotManagedSessionAction::Logout, fleetController.stopping ? BotManagedSessionReason::Shutdown : BotManagedSessionReason::Explicit, memberId, sessionGenerations[memberId], it->first);
 			it = sessions.erase(it);
 		} else {
 			success = false;
@@ -380,6 +383,32 @@ uint32_t BotManager::ordinaryPlayerCount() const {
 	}));
 }
 
+void BotManager::recordManagedSessionEvent(BotManagedSessionAction action, BotManagedSessionReason reason, BotFleetMemberId memberId, uint64_t generation, std::string name) {
+	managedSessionEvents.push_back({ ++managedSessionEventSequence, action, reason, memberId, generation, std::move(name) });
+	while (managedSessionEvents.size() > 1024) managedSessionEvents.pop_front();
+}
+
+std::vector<BotManagedSessionEvent> BotManager::managedSessionEventsAfter(uint64_t sequence) const {
+	std::vector<BotManagedSessionEvent> result;
+	for (const auto &event : managedSessionEvents) if (event.sequence > sequence) result.push_back(event);
+	return result;
+}
+
+std::vector<BotManagedSessionIdentity> BotManager::managedSessionIdentities() const {
+	std::vector<BotManagedSessionIdentity> result;
+	result.reserve(sessions.size());
+	for (const auto &[name, session] : sessions) {
+		const auto player = session->getPlayer();
+		if (!player) continue;
+		const auto generation = sessionGenerations.find(player->getGUID());
+		const auto worldPlayer = game.getPlayerByID(player->getID());
+		result.push_back({ player->getGUID(), generation == sessionGenerations.end() ? 0 : generation->second, name,
+		                   session->getState() == BotSessionState::Placed && worldPlayer == player });
+	}
+	std::ranges::sort(result, {}, &BotManagedSessionIdentity::memberId);
+	return result;
+}
+
 BotFleetFailure BotManager::configureFleet(BotFleetPopulationPolicy population, BotFleetDistributionPolicy distribution, std::vector<BotFleetMemberProfile> members, uint32_t intervalTicks) {
 	if (const auto failure = BotFleet::validate(population); failure != BotFleetFailure::None) return failure;
 	if (const auto failure = BotFleet::validate(distribution, members); failure != BotFleetFailure::None) return failure;
@@ -406,8 +435,15 @@ BotFleetReconciliation BotManager::reconcileFleet(uint64_t now, bool overloaded)
 	for (const auto &member : fleetMembers) {
 		auto observation = fleetLifecycle.contains(member.id) ? fleetLifecycle.at(member.id) : BotFleetObservation { .id = member.id };
 		observation.observationRevision = fleetObservationRevision;
-		const auto session = getSession(member.name);
+		auto session = getSession(member.name);
 		const auto worldPlayer = game.getPlayerByName(member.name);
+		const auto managedPlayer = session && session->getPlayer() ? game.getPlayerByID(session->getPlayer()->getID()) : nullptr;
+		if (session && session->getState() == BotSessionState::Placed && session->getPlayer() && managedPlayer != session->getPlayer()) {
+			const auto generation = sessionGenerations[member.id];
+			recordManagedSessionEvent(BotManagedSessionAction::UnexpectedLoss, BotManagedSessionReason::WorldRemoval, member.id, generation, member.name);
+			(void)logout(member.name, false, BotManagedSessionReason::WorldRemoval);
+			session.reset();
+		}
 		observation.ordinaryHuman = worldPlayer && worldPlayer->isNetworkControlled();
 		observation.duplicateSession = session && (!session->getPlayer() || session->getPlayer()->getGUID() != member.id);
 		if (session && session->getState() == BotSessionState::Placed && session->getPlayer() && session->getPlayer()->getGUID() == member.id) {
@@ -429,7 +465,7 @@ BotFleetReconciliation BotManager::reconcileFleet(uint64_t now, bool overloaded)
 		lifecycle.id = member->id;
 		if (request.type == BotFleetLifecycleRequestType::Login) {
 			lifecycle.state = BotFleetMemberState::LoginQueued;
-			if (const auto session = login(member->name); session && session->getState() == BotSessionState::Placed) {
+			if (const auto session = login(member->name, BotManagedSessionReason::Reconciliation); session && session->getState() == BotSessionState::Placed) {
 				lifecycle.state = BotFleetMemberState::Placed;
 				lifecycle.placedAtTick = now;
 				lifecycle.regionIntent = request.regionIntent;
@@ -441,7 +477,7 @@ BotFleetReconciliation BotManager::reconcileFleet(uint64_t now, bool overloaded)
 			}
 		} else {
 			lifecycle.state = BotFleetMemberState::DrainRequested;
-			if (logout(member->name, true)) {
+			if (logout(member->name, true, BotManagedSessionReason::Reconciliation)) {
 				lifecycle = { .id = member->id, .state = BotFleetMemberState::Offline, .observationRevision = fleetObservationRevision };
 			} else {
 				lifecycle.state = BotFleetMemberState::Backoff;

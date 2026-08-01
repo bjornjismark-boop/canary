@@ -5,6 +5,7 @@ import unittest
 import os
 import argparse
 import subprocess
+import json
 from unittest import mock
 from pathlib import Path
 
@@ -30,6 +31,40 @@ class LiveSoakTest(unittest.TestCase):
         base = {k: 0 for k in ("offline","loginQueued","loading","placementPending","placed","draining","saving","logoutPending","failed","ordinaryPlayers","lifecycleQueueDepth","commandQueueDepth","coordinationReservations")}
         self.assertEqual([], soak.validate_snapshot(base, 4)); base["duplicateSessions"] = 1
         self.assertIn("duplicate_playerbot_session", soak.validate_snapshot(base, 4))
+    def test_managed_lifecycle_rejects_hidden_replacement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); root.joinpath("managed-lifecycle.jsonl").write_text(
+                '\n'.join(json.dumps(event) for event in (
+                    {"action":"login","reason":"reconciliation","memberId":1,"name":"bot","sessionGeneration":1},
+                    {"action":"unexpected_loss","reason":"world_removal","memberId":1,"name":"bot","sessionGeneration":1},
+                    {"action":"login","reason":"reconciliation","memberId":1,"name":"bot","sessionGeneration":2},
+                ))+'\n')
+            root.joinpath("fleet-snapshots.jsonl").write_text(json.dumps({"managedMembers":[{"id":1,"generation":2,"authoritativelyPlaced":True}]})+'\n')
+            failures=soak.ManagedLifecycleMonitor().observe(root)
+            self.assertIn("population_churn_hidden_by_reconciliation",failures)
+            self.assertIn("unscheduled_session_replacement",failures)
+    def test_managed_lifecycle_rejects_ping_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); root.joinpath("managed-lifecycle.jsonl").write_text(json.dumps(
+                {"action":"logout","reason":"ping_timeout","memberId":7,"name":"bot","sessionGeneration":1})+'\n')
+            root.joinpath("fleet-snapshots.jsonl").write_text(json.dumps({"managedMembers":[]})+'\n')
+            monitor=soak.ManagedLifecycleMonitor(); failures=monitor.observe(root)
+            self.assertIn("managed_ping_timeout",failures); self.assertEqual(1,monitor.managed_ping_timeouts)
+    def test_controlled_restart_allows_new_generation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); root.joinpath("managed-lifecycle.jsonl").write_text(json.dumps(
+                {"action":"login","reason":"reconciliation","memberId":1,"name":"bot","sessionGeneration":1})+'\n')
+            root.joinpath("fleet-snapshots.jsonl").write_text(json.dumps({"managedMembers":[{"id":1,"generation":1,"authoritativelyPlaced":True}]})+'\n')
+            monitor=soak.ManagedLifecycleMonitor(); self.assertEqual([],monitor.observe(root))
+            with root.joinpath("managed-lifecycle.jsonl").open("a") as output: output.write(json.dumps(
+                {"action":"login","reason":"reconciliation","memberId":1,"name":"bot","sessionGeneration":1})+'\n')
+            self.assertEqual([],monitor.observe(root,restart_window=True))
+    def test_invariants_document_is_valid_when_samples_are_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); root.joinpath("fleet-snapshots.jsonl").write_text(""); root.joinpath("ticks.jsonl").write_text("")
+            _,failures=soak.evaluate_adapter_artifacts(root,4)
+            document=json.loads(root.joinpath("invariants.json").read_text())
+            self.assertTrue(failures); self.assertEqual(failures,document["failures"])
     def test_loopback(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/"config.lua"; path.write_text('ip = "0.0.0.0"')
