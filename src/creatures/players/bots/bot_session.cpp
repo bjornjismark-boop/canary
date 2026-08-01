@@ -215,6 +215,8 @@ BotConversationResult BotSession::advanceDialogue(uint32_t id,BotDialogueIntent 
 BotConversationResult BotSession::cancelDialogue(){if(!controller)return{.state=BotDialogueState::Cancelled,.response=BotDialogueResponse::Cancelled,.failure=BotDialogueFailure::InvalidLifecycle};return controller->cancelDialogue();}
 BotQuestObservation BotSession::observeQuest(const BotQuestDefinition&d,std::vector<BotQuestEvidence>e,const BotQuestBounds&b){if(state!=BotSessionState::Placed||!controller)return{};return controller->observeQuest(d,std::move(e),b);}
 BotQuestEligibility BotSession::evaluateQuest(BotMissionId id,const BotQuestDefinition&d,const BotNpcDialoguePolicy&p,const BotQuestBounds&b){if(state!=BotSessionState::Placed||!controller)return{.result=BotQuestFailure::InvalidLifecycle};return controller->evaluateQuest(id,d,p,b);}
+BotQuestExecutionResult BotSession::startQuestExecution(const BotQuestPlan&p,const BotQuestExecutionPolicy&policy){if(state!=BotSessionState::Placed||!controller)return{.state=BotQuestExecutionState::Failed,.failure=BotQuestExecutionFailure::InvalidLifecycle};return controller->startQuestExecution(p,policy);}
+BotQuestExecutionResult BotSession::advanceQuestExecution(const BotQuestPlan&p,const BotQuestStepObservation&o,const BotQuestExecutionPolicy&policy){if(state!=BotSessionState::Placed||!controller)return{.state=BotQuestExecutionState::Failed,.failure=BotQuestExecutionFailure::InvalidLifecycle};return controller->advanceQuestExecution(p,o,policy);}
 
 bool BotSession::save() const {
 	if (!player || state == BotSessionState::Created || state == BotSessionState::PendingSave || state == BotSessionState::Closed) {

@@ -67,6 +67,8 @@ public:
 	[[nodiscard]] BotConversationResult cancelDialogue(const std::string &);
 	[[nodiscard]] BotQuestObservation observeQuest(const std::string &, const BotQuestDefinition &, std::vector<BotQuestEvidence> = {}, const BotQuestBounds & = {});
 	[[nodiscard]] BotQuestEligibility evaluateQuest(const std::string &, BotMissionId, const BotQuestDefinition &, const BotNpcDialoguePolicy & = {}, const BotQuestBounds & = {});
+	[[nodiscard]] BotQuestExecutionResult startQuestExecution(const std::string &, const BotQuestPlan &, const BotQuestExecutionPolicy & = {});
+	[[nodiscard]] BotQuestExecutionResult advanceQuestExecution(const std::string &, const BotQuestPlan &, const BotQuestStepObservation &, const BotQuestExecutionPolicy & = {});
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

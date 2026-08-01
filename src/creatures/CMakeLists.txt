@@ -43,6 +43,8 @@ target_sources(
 			players/bots/bot_dialogue.hpp
 			players/bots/bot_quest.cpp
 			players/bots/bot_quest.hpp
+			players/bots/bot_quest_execution.cpp
+			players/bots/bot_quest_execution.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp

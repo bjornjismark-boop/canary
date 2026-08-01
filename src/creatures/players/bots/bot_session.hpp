@@ -66,6 +66,7 @@ public:
 	[[nodiscard]] const BotResupplyProgress *getResupplyProgress() const { return controller ? &controller->getResupplyProgress() : nullptr; }
 	[[nodiscard]] const BotDialogueProgress *getDialogueProgress() const { return controller ? &controller->getDialogueProgress() : nullptr; }
 	[[nodiscard]] const std::optional<BotQuestObservation> *getQuestObservation() const { return controller ? &controller->getQuestObservation() : nullptr; }
+	[[nodiscard]] const std::optional<BotQuestExecutionResult> *getQuestExecution() const { return controller ? &controller->getQuestExecution() : nullptr; }
 
 private:
 	friend class BotManager;
@@ -108,6 +109,8 @@ private:
 	[[nodiscard]] BotConversationResult cancelDialogue();
 	[[nodiscard]] BotQuestObservation observeQuest(const BotQuestDefinition &, std::vector<BotQuestEvidence>, const BotQuestBounds &);
 	[[nodiscard]] BotQuestEligibility evaluateQuest(BotMissionId, const BotQuestDefinition &, const BotNpcDialoguePolicy &, const BotQuestBounds &);
+	[[nodiscard]] BotQuestExecutionResult startQuestExecution(const BotQuestPlan &, const BotQuestExecutionPolicy &);
+	[[nodiscard]] BotQuestExecutionResult advanceQuestExecution(const BotQuestPlan &, const BotQuestStepObservation &, const BotQuestExecutionPolicy &);
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();

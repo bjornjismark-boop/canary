@@ -18,6 +18,7 @@
 #include "creatures/players/bots/bot_resupply.hpp"
 #include "creatures/players/bots/bot_dialogue.hpp"
 #include "creatures/players/bots/bot_quest.hpp"
+#include "creatures/players/bots/bot_quest_execution.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -90,6 +91,10 @@ public:
 	[[nodiscard]] BotQuestEligibility evaluateQuest(BotMissionId, const BotQuestDefinition &, const BotNpcDialoguePolicy & = {}, const BotQuestBounds & = {});
 	void clearQuestAssessment() { questObservation.reset(); }
 	[[nodiscard]] const std::optional<BotQuestObservation> &getQuestObservation() const { return questObservation; }
+	[[nodiscard]] BotQuestExecutionResult startQuestExecution(const BotQuestPlan &, const BotQuestExecutionPolicy & = {});
+	[[nodiscard]] BotQuestExecutionResult advanceQuestExecution(const BotQuestPlan &, const BotQuestStepObservation &, const BotQuestExecutionPolicy & = {});
+	[[nodiscard]] const std::optional<BotQuestExecutionResult> &getQuestExecution() const { return questExecution; }
+	void clearQuestExecution() { questExecution.reset(); }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -119,4 +124,5 @@ private:
 	BotResupplyProgress resupplyProgress;
 	BotDialogueProgress dialogueProgress;
 	std::optional<BotQuestObservation> questObservation;
+	std::optional<BotQuestExecutionResult> questExecution;
 };

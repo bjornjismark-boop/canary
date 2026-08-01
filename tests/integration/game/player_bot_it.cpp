@@ -9,6 +9,7 @@
 #include "creatures/players/bots/bot_manager.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/bots/bot_resupply.hpp"
+#include "creatures/players/bots/bot_quest_execution.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
 #include "creatures/players/player.hpp"
@@ -1779,6 +1780,9 @@ TEST(PlayerBotIntegrationTest, ResupplySessionCloseIsSafeAndOrdinaryInventoryRem
 namespace{
 std::shared_ptr<Npc> createPlayerBotDialogueNpc(const Position&position){const auto loader=createPlayerBotShopNpc(position);if(loader)(void)g_game().removeCreature(loader,true);const auto type=g_npcs().getNpcType("PlayerBotDialogueFixtureNpc");if(!type)return nullptr;auto npc=std::make_shared<Npc>(type);if(!g_game().placeCreature(npc,position,false,true))return nullptr;return npc;}
 BotNpcDialoguePolicy integrationDialoguePolicy(){return{.configuredNpcNames={"playerbotdialoguefixturenpc"},.phrases={{BotDialogueIntent::Greeting,"hi","welcome"},{BotDialogueIntent::ConfiguredTopic,"job","guide"},{BotDialogueIntent::Yes,"yes","confirmed"},{BotDialogueIntent::No,"no","cancelled"},{BotDialogueIntent::Farewell,"bye","farewell"}},.maximumPhrases=6,.maximumRetries=2,.maximumTopics=3,.maximumResponseLength=64,.responseWait=std::chrono::milliseconds(10)};}
+std::shared_ptr<Npc> createPlayerBotQuestWitnessNpc(const Position&position){const auto type=g_npcs().getNpcType("PlayerBotQuestWitnessFixtureNpc");if(!type)return nullptr;auto npc=std::make_shared<Npc>(type);if(!g_game().placeCreature(npc,position,false,true))return nullptr;return npc;}
+BotNpcDialoguePolicy questGuideStartPolicy(){auto policy=integrationDialoguePolicy();policy.phrases.push_back({BotDialogueIntent::ConfiguredFollowUp,"mission","started"});policy.maximumPhrases=7;return policy;}
+BotNpcDialoguePolicy questWitnessPolicy(){return{.configuredNpcNames={"playerbotquestwitnessfixturenpc"},.phrases={{BotDialogueIntent::Greeting,"hi","welcome"},{BotDialogueIntent::ConfiguredTopic,"witness","witnessed"},{BotDialogueIntent::Farewell,"bye","farewell"}},.maximumPhrases=4,.maximumRetries=2,.maximumTopics=2,.maximumResponseLength=64,.responseWait=std::chrono::milliseconds(10)};}
 }
 
 TEST(PlayerBotIntegrationTest, DialogueObservesApproachesAndGreetsRealNpcThroughOrdinarySpeech){PlayerBotDatabaseFixture fixture(g_database());for(int x=0;x<=3;++x)createWalkableTile(Position(fixture.start.x+x,fixture.start.y,fixture.start.z));BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());const auto npc=createPlayerBotDialogueNpc(Position(fixture.start.x+3,fixture.start.y,fixture.start.z));ASSERT_NE(nullptr,npc);auto route=manager.startRoute(fixture.name,Position(fixture.start.x+2,fixture.start.y,fixture.start.z),std::chrono::milliseconds(1));for(uint8_t i=0;i<8&&route.state!=BotRouteState::Arrived;++i)route=manager.advanceRoute(fixture.name,std::chrono::milliseconds(100+i*100));ASSERT_EQ(BotRouteState::Arrived,route.state);const auto policy=integrationDialoguePolicy();const auto observed=manager.observeDialogue(fixture.name,policy);const auto selected=BotDialogue::select(observed,policy);ASSERT_TRUE(selected);EXPECT_EQ(npc->getID(),selected->npcId);EXPECT_EQ(BotDialogueState::AwaitingResponse,manager.advanceDialogue(fixture.name,npc->getID(),BotDialogueIntent::Greeting,std::chrono::milliseconds(1000),policy).state);const auto result=manager.advanceDialogue(fixture.name,npc->getID(),BotDialogueIntent::Greeting,std::chrono::milliseconds(1001),policy);EXPECT_EQ(BotDialogueResponse::GreetingAccepted,result.response);EXPECT_TRUE(npc->isInteractingWithPlayer(player->getID()));EXPECT_TRUE(g_game().removeCreature(npc,true));EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());}
@@ -1808,3 +1812,191 @@ TEST(PlayerBotIntegrationTest, QuestRewardVerificationObservesRealAuthoritativeC
 TEST(PlayerBotIntegrationTest, QuestObservationDoesNotMutateRewardsOrOrdinaryPlayerBehavior){PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());const auto storageBefore=player->getStorageValue(900100);const auto experienceBefore=player->getExperience();const auto itemsBefore=std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(2160);const auto observed=manager.observeQuest(fixture.name,integrationQuest(player->getVocationId(),fixture.start));EXPECT_FALSE(observed.containsWorldOwnership());EXPECT_EQ(storageBefore,player->getStorageValue(900100));EXPECT_EQ(experienceBefore,player->getExperience());EXPECT_EQ(itemsBefore,std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(2160));EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());}
 
 TEST(PlayerBotIntegrationTest, QuestSessionCloseClearsAssessmentAndDatabaseRows){PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);const auto player=std::const_pointer_cast<Player>(session->getPlayer());(void)manager.observeQuest(fixture.name,integrationQuest(player->getVocationId(),fixture.start));ASSERT_NE(nullptr,session->getQuestObservation());ASSERT_TRUE(session->getQuestObservation()->has_value());EXPECT_FALSE(session->getQuestObservation()->value().containsWorldOwnership());EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_EQ(nullptr,session->getQuestObservation());ASSERT_TRUE(fixture.cleanup());EXPECT_FALSE(fixture.hasCommittedRows());}
+
+TEST(PlayerBotIntegrationTest, QuestExecutionDelegatesRealTravelDialogueAndVerifiedCheckpoints){PlayerBotDatabaseFixture fixture(g_database());for(int x=0;x<=3;++x)createWalkableTile(Position(fixture.start.x+x,fixture.start.y,fixture.start.z));BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());auto backpack=Item::CreateItem(ITEM_BACKPACK);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(player,backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT));ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),Item::CreateItem(3031,1),INDEX_WHEREEVER,FLAG_NOLIMIT));player->storage().add(900101,5);const auto definition=integrationQuest(player->getVocationId(),Position(fixture.start.x+2,fixture.start.y,fixture.start.z));auto observation=manager.observeQuest(fixture.name,definition);BotQuestPlan plan{.questId=definition.id,.missionId=7002,.revision=1,.steps={{.type=BotQuestStepType::TravelRegion,.region=Position(fixture.start.x+2,fixture.start.y,fixture.start.z)},{.type=BotQuestStepType::SendDialogue,.configuredName="playerbotdialoguefixturenpc"},{.type=BotQuestStepType::VerifyProgress,.expectedMissionState=BotMissionState::Started}}};auto execution=BotQuestExecution::start(plan,observation,manager.evaluateQuest(fixture.name,7002,definition));ASSERT_EQ(BotQuestExecutionState::Traveling,execution.state);auto route=manager.startRoute(fixture.name,Position(fixture.start.x+2,fixture.start.y,fixture.start.z),std::chrono::milliseconds(1));for(uint8_t i=0;i<8&&route.state!=BotRouteState::Arrived;++i)route=manager.advanceRoute(fixture.name,std::chrono::milliseconds(100+i*100));ASSERT_EQ(BotRouteState::Arrived,route.state);execution=BotQuestExecution::advance(plan,execution,{.revision=observation.revision+1,.regionReached=true,.missionState=BotMissionState::Available});ASSERT_EQ(1,execution.checkpoint.verifiedStepIndex);const auto npc=createPlayerBotDialogueNpc(Position(fixture.start.x+3,fixture.start.y,fixture.start.z));ASSERT_NE(nullptr,npc);const auto policy=integrationDialoguePolicy();(void)manager.advanceDialogue(fixture.name,npc->getID(),BotDialogueIntent::Greeting,std::chrono::milliseconds(1000),policy);ASSERT_EQ(BotDialogueResponse::GreetingAccepted,manager.advanceDialogue(fixture.name,npc->getID(),BotDialogueIntent::Greeting,std::chrono::milliseconds(1001),policy).response);execution=BotQuestExecution::advance(plan,execution,{.revision=observation.revision+2,.actionAccepted=true,.visibleDialogueResponse=true,.missionState=BotMissionState::Available});ASSERT_EQ(2,execution.checkpoint.verifiedStepIndex);player->storage().add(900100,1);observation=manager.observeQuest(fixture.name,definition);execution=BotQuestExecution::advance(plan,execution,{.revision=observation.revision+3,.authoritativeProgress=true,.missionState=BotMissionState::Started});EXPECT_EQ(BotQuestExecutionState::Completed,execution.state);EXPECT_EQ(3,execution.checkpoint.verifiedStepIndex);EXPECT_TRUE(g_game().removeCreature(npc,true));EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());}
+
+TEST(PlayerBotIntegrationTest, QuestExecutionSurvivalDeathAndSessionReconstructionAreBounded){PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);const auto player=std::const_pointer_cast<Player>(session->getPlayer());auto definition=integrationQuest(player->getVocationId(),fixture.start);const auto observation=manager.observeQuest(fixture.name,definition);BotQuestPlan plan{.questId=definition.id,.missionId=7002,.revision=2,.steps={{.type=BotQuestStepType::TravelRegion,.region=fixture.start}}};auto execution=BotQuestExecution::start(plan,observation,{});auto suspended=BotQuestExecution::advance(plan,execution,{.revision=observation.revision+1,.survivalRequired=true});EXPECT_EQ(BotQuestExecutionState::Suspended,suspended.state);auto resumed=BotQuestExecution::advance(plan,suspended,{.revision=observation.revision+2,.regionReached=true});EXPECT_EQ(BotQuestExecutionState::Completed,resumed.state);auto dead=BotQuestExecution::advance(plan,execution,{.revision=observation.revision+1,.dead=true});EXPECT_EQ(BotQuestExecutionState::Dead,dead.state);EXPECT_FALSE(dead.containsWorldOwnership());EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_EQ(nullptr,session->getQuestObservation());ASSERT_TRUE(fixture.cleanup());EXPECT_FALSE(fixture.hasCommittedRows());}
+
+TEST(PlayerBotIntegrationTest, QuestExecutionCompletesOrdinaryMultiNpcKillCollectHandInAndRewardFlow) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	for (int x = 0; x <= 6; ++x) createWalkableTile(Position(fixture.start.x + x, fixture.start.y, fixture.start.z));
+	createWalkableTile(Position(fixture.start.x, fixture.start.y + 1, fixture.start.z));
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	auto backpack = Item::CreateItem(ITEM_BACKPACK);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(player, backpack, CONST_SLOT_BACKPACK, FLAG_NOLIMIT));
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(backpack->getContainer(), Item::CreateItem(3031, 1), INDEX_WHEREEVER, FLAG_NOLIMIT));
+	player->storage().add(900101, 5);
+	const Position hunt(fixture.start.x + 2, fixture.start.y, fixture.start.z);
+	auto definition = integrationQuest(player->getVocationId(), hunt);
+	definition.missions.front().rewards.push_back({ BotQuestRewardType::ItemRemoved, 3031, 1 });
+	definition.missions.front().rewards.push_back({ BotQuestRewardType::MoneyChanged, 0, 1 });
+	auto quest = manager.observeQuest(fixture.name, definition);
+	ASSERT_TRUE(manager.evaluateQuest(fixture.name, 7002, definition).eligible());
+	BotQuestPlan plan {
+		.questId = 7001, .missionId = 7002, .revision = 30,
+		.steps = {
+			{ .type = BotQuestStepType::SendDialogue, .missionId = 7002, .configuredName = "playerbotdialoguefixturenpc", .configuredPhrase = "mission" },
+			{ .type = BotQuestStepType::TravelRegion, .missionId = 7002, .region = hunt },
+			{ .type = BotQuestStepType::KillCreature, .missionId = 7002, .stableTargetId = 77 },
+			{ .type = BotQuestStepType::CollectItem, .missionId = 7002, .itemTypeId = 3031, .requiredCount = 1 },
+			{ .type = BotQuestStepType::SendDialogue, .missionId = 7002, .configuredName = "playerbotquestwitnessfixturenpc", .configuredPhrase = "witness" },
+			{ .type = BotQuestStepType::DeliverItem, .missionId = 7002, .itemTypeId = 3031, .requiredCount = 1 },
+			{ .type = BotQuestStepType::VerifyReward, .missionId = 7002 },
+			{ .type = BotQuestStepType::Finish, .missionId = 7002 },
+		}
+	};
+	auto execution = manager.startQuestExecution(fixture.name, plan);
+	ASSERT_EQ(BotQuestExecutionState::StartingDialogue, execution.state);
+	uint64_t revision = quest.revision;
+
+	const auto guide = createPlayerBotDialogueNpc(Position(fixture.start.x, fixture.start.y + 1, fixture.start.z));
+	ASSERT_NE(nullptr, guide);
+	const auto startPolicy = questGuideStartPolicy();
+	EXPECT_EQ(BotDialogueState::AwaitingResponse, manager.advanceDialogue(fixture.name, guide->getID(), BotDialogueIntent::Greeting, std::chrono::milliseconds(1), startPolicy).state);
+	EXPECT_EQ(BotDialogueResponse::GreetingAccepted, manager.advanceDialogue(fixture.name, guide->getID(), BotDialogueIntent::Greeting, std::chrono::milliseconds(2), startPolicy).response);
+	EXPECT_EQ(BotDialogueState::AwaitingResponse, manager.advanceDialogue(fixture.name, guide->getID(), BotDialogueIntent::ConfiguredFollowUp, std::chrono::milliseconds(3), startPolicy).state);
+	EXPECT_EQ(BotDialogueResponse::TopicAccepted, manager.advanceDialogue(fixture.name, guide->getID(), BotDialogueIntent::ConfiguredFollowUp, std::chrono::milliseconds(4), startPolicy).response);
+	ASSERT_EQ(1, player->getStorageValue(900100));
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .actionAccepted = true, .authoritativeProgress = true, .visibleDialogueResponse = true, .missionState = BotMissionState::Started });
+	ASSERT_EQ(1, execution.checkpoint.verifiedStepIndex);
+	(void)manager.advanceDialogue(fixture.name, guide->getID(), BotDialogueIntent::Farewell, std::chrono::milliseconds(5), startPolicy);
+	(void)manager.advanceDialogue(fixture.name, guide->getID(), BotDialogueIntent::Farewell, std::chrono::milliseconds(6), startPolicy);
+	(void)manager.cancelDialogue(fixture.name);
+
+	auto route = manager.startRoute(fixture.name, hunt, std::chrono::milliseconds(10));
+	for (uint8_t i = 0; i < 10 && route.state != BotRouteState::Arrived; ++i) route = manager.advanceRoute(fixture.name, std::chrono::milliseconds(100 + i * 100));
+	ASSERT_EQ(BotRouteState::Arrived, route.state);
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .regionReached = true, .missionState = BotMissionState::Started });
+	ASSERT_EQ(2, execution.checkpoint.verifiedStepIndex);
+
+	auto monsterType = std::make_shared<MonsterType>("QuestExecutionMonster");
+	monsterType->info.health = 10; monsterType->info.healthMax = 10; monsterType->info.experience = 5; monsterType->info.lookcorpse = 3994;
+	auto monster = std::make_shared<Monster>(monsterType);
+	const Position monsterPosition(hunt.x + 1, hunt.y, hunt.z);
+	ASSERT_TRUE(g_game().placeCreature(monster, monsterPosition, false, true));
+	ASSERT_EQ(monster->getID(), manager.evaluateCombat(fixture.name).selectedCreatureId);
+	const auto perception = BotPerception::observe(player); ASSERT_TRUE(perception);
+	const auto combat = BotCombat::observe(player, *perception); ASSERT_TRUE(combat);
+	const auto target = std::ranges::find(combat->creatures, monster->getID(), &BotCombatCreatureObservation::id); ASSERT_NE(combat->creatures.end(), target);
+	ASSERT_EQ(BotCombatExecutionOutcome::TargetAcquired, manager.executeCombat(fixture.name, { monster->getID(), combat->revision, target->signature, player->getPosition() }, std::chrono::milliseconds(1200)).outcome);
+	const auto monsterId = monster->getID();
+	CombatDamage fatal; fatal.primary = { COMBAT_PHYSICALDAMAGE, -100 };
+	ASSERT_TRUE(g_game().combatChangeHealth(player, monster, fatal));
+	monster->onDeath(); ASSERT_TRUE(monster->isRemoved());
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .authoritativeProgress = true, .deathObserved = true, .missionState = BotMissionState::InProgress });
+	ASSERT_EQ(3, execution.checkpoint.verifiedStepIndex);
+
+	const auto corpseTile = g_game().map.getTile(monsterPosition); ASSERT_NE(nullptr, corpseTile);
+	std::shared_ptr<Item> corpse;
+	for (const auto &item : *corpseTile->getItemList()) if (item && item->isCorpse() && item->getContainer()) { corpse = item; break; }
+	ASSERT_NE(nullptr, corpse);
+	corpse->getContainer()->internalAddThing(Item::CreateItem(3031, 1));
+	BotLootPolicy lootPolicy { .rules = { { { .itemTypeId = 3031, .valueCategory = 1, .priority = 1 } } } };
+	const auto selected = manager.evaluateLoot(fixture.name, monsterPosition, monsterId, {}, lootPolicy); ASSERT_TRUE(selected.selected);
+	BotLootTransferRequest lootRequest { .corpsePosition = monsterPosition, .sourceCreatureId = monsterId, .corpseSignature = selected.corpse.signature, .itemTypeId = 3031, .itemSignature = selected.selected->item.signature, .count = 1 };
+	EXPECT_EQ(BotLootTransferOutcome::Pending, manager.executeLoot(fixture.name, lootRequest, std::chrono::milliseconds(1300), lootPolicy).outcome);
+	EXPECT_EQ(BotLootTransferOutcome::Succeeded, manager.executeLoot(fixture.name, lootRequest, std::chrono::milliseconds(1301), lootPolicy).outcome);
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .itemAdded = true, .missionState = BotMissionState::InProgress });
+	ASSERT_EQ(4, execution.checkpoint.verifiedStepIndex);
+
+	const auto witness = createPlayerBotQuestWitnessNpc(monsterPosition); ASSERT_NE(nullptr, witness);
+	const auto witnessPolicy = questWitnessPolicy();
+	quest = manager.observeQuest(fixture.name, definition);
+	const auto beforeReward = BotQuest::rewardObservation(quest, 7002);
+	const auto itemBefore = std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031);
+	ASSERT_GE(itemBefore, 1);
+	(void)manager.advanceDialogue(fixture.name, witness->getID(), BotDialogueIntent::Greeting, std::chrono::milliseconds(1400), witnessPolicy);
+	ASSERT_EQ(BotDialogueResponse::GreetingAccepted, manager.advanceDialogue(fixture.name, witness->getID(), BotDialogueIntent::Greeting, std::chrono::milliseconds(1401), witnessPolicy).response);
+	(void)manager.advanceDialogue(fixture.name, witness->getID(), BotDialogueIntent::ConfiguredTopic, std::chrono::milliseconds(1402), witnessPolicy);
+	ASSERT_EQ(BotDialogueResponse::TopicAccepted, manager.advanceDialogue(fixture.name, witness->getID(), BotDialogueIntent::ConfiguredTopic, std::chrono::milliseconds(1403), witnessPolicy).response);
+	ASSERT_EQ(3, player->getStorageValue(900100));
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .actionAccepted = true, .authoritativeProgress = true, .visibleDialogueResponse = true, .missionState = BotMissionState::Completed });
+	ASSERT_EQ(5, execution.checkpoint.verifiedStepIndex);
+	ASSERT_EQ(3, player->getStorageValue(900100));
+	EXPECT_EQ(itemBefore - 1, std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031));
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .actionAccepted = true, .authoritativeProgress = true, .visibleDialogueResponse = true, .itemRemoved = true, .missionState = BotMissionState::Completed });
+	ASSERT_EQ(6, execution.checkpoint.verifiedStepIndex);
+	(void)manager.advanceDialogue(fixture.name, witness->getID(), BotDialogueIntent::Farewell, std::chrono::milliseconds(1404), witnessPolicy);
+	(void)manager.advanceDialogue(fixture.name, witness->getID(), BotDialogueIntent::Farewell, std::chrono::milliseconds(1405), witnessPolicy);
+	(void)manager.cancelDialogue(fixture.name);
+	ASSERT_TRUE(g_game().removeCreature(witness, true));
+	++definition.revision;
+	const auto afterReward = BotQuest::rewardObservation(manager.observeQuest(fixture.name, definition), 7002);
+	const auto verified = BotQuest::verifyRewards(beforeReward, afterReward, definition.missions.front().rewards);
+	ASSERT_EQ(BotQuestVerificationResult::Verified, verified.result);
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .missionState = BotMissionState::Completed, .reward = verified.result });
+	ASSERT_EQ(7, execution.checkpoint.verifiedStepIndex);
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = ++revision, .authoritativeProgress = true, .missionState = BotMissionState::Completed });
+	EXPECT_EQ(BotQuestExecutionState::Completed, execution.state);
+	EXPECT_EQ(8, execution.checkpoint.verifiedStepIndex);
+	EXPECT_FALSE(execution.containsWorldOwnership());
+	EXPECT_TRUE(g_game().removeCreature(guide, true));
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	EXPECT_EQ(nullptr, session->getQuestExecution());
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerUsesSameRegisteredQuestNpcFlowUnchanged) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	createWalkableTile(Position(fixture.start.x + 1, fixture.start.y, fixture.start.z));
+	auto player = std::make_shared<Player>();
+	player->setName(fixture.name);
+	ASSERT_TRUE(IOLoginDataLoad::preLoadPlayer(player, fixture.name));
+	ASSERT_TRUE(IOLoginData::loadPlayerById(player, fixture.playerId, false));
+	player->setID(); player->setOnline(true);
+	ASSERT_TRUE(g_game().placeCreature(player, fixture.start, false, true));
+	auto backpack = Item::CreateItem(ITEM_BACKPACK);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(player, backpack, CONST_SLOT_BACKPACK, FLAG_NOLIMIT));
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(backpack->getContainer(), Item::CreateItem(3031, 1), INDEX_WHEREEVER, FLAG_NOLIMIT));
+	const auto guide = createPlayerBotDialogueNpc(Position(fixture.start.x + 1, fixture.start.y, fixture.start.z)); ASSERT_NE(nullptr, guide);
+	g_game().playerSay(player->getID(), 0, TALKTYPE_SAY, "", "hi");
+	g_game().playerSay(player->getID(), 0, TALKTYPE_SAY, "", "mission");
+	ASSERT_EQ(1, player->getStorageValue(900100));
+	ASSERT_TRUE(g_game().removeCreature(guide, true));
+	const auto witness = createPlayerBotQuestWitnessNpc(Position(fixture.start.x + 1, fixture.start.y, fixture.start.z)); ASSERT_NE(nullptr, witness);
+	const auto experienceBefore = player->getExperience();
+	g_game().playerSay(player->getID(), 0, TALKTYPE_SAY, "", "hi");
+	g_game().playerSay(player->getID(), 0, TALKTYPE_SAY, "", "witness");
+	EXPECT_EQ(3, player->getStorageValue(900100));
+	EXPECT_EQ(0U, std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031));
+	EXPECT_EQ(1U, std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(266));
+	EXPECT_EQ(experienceBefore + 50, player->getExperience());
+	EXPECT_TRUE(g_game().removeCreature(witness, true));
+	player->setOnline(false);
+	const std::function<bool(const std::shared_ptr<Player>&)> noSave;
+	EXPECT_EQ(ManagedPlayerRemovalResult::Complete, g_game().removeManagedPlayer(player, true, noSave));
+	ASSERT_TRUE(fixture.cleanup());
+	EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, QuestExecutionUseStepDelegatesProductionLadderTransition) {
+	ProductionTransitionActionFixture actionFixture; ASSERT_TRUE(actionFixture.isLoaded());
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position ladderPosition(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	const Position destination(ladderPosition.x, ladderPosition.y + 1, ladderPosition.z - 1);
+	createWalkableTile(fixture.start); createWalkableTile(ladderPosition); createWalkableTile(destination);
+	const auto ladderTile = g_game().map.getTile(ladderPosition); ASSERT_NE(nullptr, ladderTile);
+	const auto ladder = Item::CreateItem(1948); ASSERT_NE(nullptr, ladder); ladderTile->internalAddThing(ladder);
+	BotManager manager(g_game()); const auto session = loginBotOrReport(manager, fixture.name); ASSERT_NE(nullptr, session);
+	auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	auto backpack = Item::CreateItem(ITEM_BACKPACK); ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(player, backpack, CONST_SLOT_BACKPACK, FLAG_NOLIMIT));
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(backpack->getContainer(), Item::CreateItem(3031, 1), INDEX_WHEREEVER, FLAG_NOLIMIT)); player->storage().add(900101, 5);
+	const auto definition = integrationQuest(player->getVocationId(), destination); const auto observation = manager.observeQuest(fixture.name, definition);
+	BotQuestPlan plan { .questId = 7001, .missionId = 7002, .revision = 40, .steps = { { .type = BotQuestStepType::UseObject, .missionId = 7002, .stableTargetId = 1948 }, { .type = BotQuestStepType::Finish, .missionId = 7002 } } };
+	auto execution = manager.startQuestExecution(fixture.name, plan); ASSERT_EQ(BotQuestExecutionState::UsingObject, execution.state);
+	BotInteractionTarget target { ladderPosition, static_cast<uint8_t>(ladderTile->getThingIndex(ladder)), 1948, 0, BotInteractionType::UseLadder }; target.signature = BotInteraction::signature(target);
+	const BotTransitionRequest request { .target = target, .expectedDestination = destination, .maxAttempts = 2, .timeout = std::chrono::milliseconds(50) };
+	ASSERT_EQ(BotTransitionState::AwaitingTransition, manager.startTransition(fixture.name, request, std::chrono::milliseconds(1)).state);
+	ASSERT_EQ(BotTransitionState::Completed, manager.advanceTransition(fixture.name, std::chrono::milliseconds(2)).state);
+	ASSERT_EQ(destination, player->getPosition());
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = observation.revision + 1, .authoritativeProgress = true, .missionState = BotMissionState::InProgress });
+	ASSERT_EQ(1, execution.checkpoint.verifiedStepIndex);
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = observation.revision + 2, .authoritativeProgress = true, .missionState = BotMissionState::InProgress });
+	EXPECT_EQ(BotQuestExecutionState::Completed, execution.state);
+	ladderTile->removeThing(ladder, 1); EXPECT_TRUE(manager.logout(fixture.name, false)); ASSERT_TRUE(fixture.cleanup());
+}
