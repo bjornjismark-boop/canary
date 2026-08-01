@@ -17,3 +17,48 @@ Authenticated reads support status, bounded audit entries, and bounded telemetry
 ## Shutdown
 
 Shutdown stops the admin service before telemetry, configuration administration, fleet reconciliation, and BotManager teardown. After stop, requests fail safely and no authentication callback is retained.
+
+# Release-hardening and soak profiles
+
+PlayerBots remain disabled by default. Keep the smoke profile (two managed bots)
+for initial validation and increase population only after the preceding profile
+passes. The built-in deterministic profiles are `smoke`, `small`, `medium`,
+`large`, and `release-candidate`; none selects a production database or enables
+an administration transport.
+
+The resource policy has non-overridable ceilings for managed population,
+pending login/logout work, command queue depth, planner actions, and
+reconciliation work. Dispatcher or scheduler pressure first stops new bot
+logins and optional planner expansion, then reduces reconciliation and optional
+telemetry/coordination work. Save, logout, shutdown, and ordinary-player work
+remain protected. Recovery uses consecutive healthy observations rather than an
+immediate oscillating resume.
+
+Run the deterministic release checks with:
+
+```sh
+UNIT_FILTER='PlayerBotFleetHardeningTest.*' \
+INTEGRATION_FILTER='PlayerBotIntegrationTest.FleetHardening*' \
+  /home/playerbots/workspace/playerbots/tools/run-playerbots-gate.sh
+```
+
+This command is bounded and uses the disposable test database configured by the
+gate. It is not a production soak. A production candidate must separately run a
+time-bounded mixed human/bot soak against an explicitly disposable environment,
+record population, wall-clock duration, tick latency, process RSS, cleanup, and
+restart cycles, and retain its terminal report. Never infer CPU or memory values
+from unsupported counters.
+
+For overload, pause new work first, use `drain` to remove low-priority bots at
+safe save boundaries, and leave ordinary players connected. On database failure,
+do not report logout complete until save succeeds. On restart, use gradual login
+and verify no duplicate session, stale coordination reservation, or invalid
+planner checkpoint. Shut down the admin service before telemetry, command,
+fleet, and manager ownership.
+
+Admin transport remains disabled or local-only and authenticated. Provision
+credentials outside Git, place TLS at a trusted reverse proxy, retain only
+bounded redacted audit/event history, and never expose secrets in query strings
+or logs. Roll back by disabling the fleet and draining it safely; do not delete
+sessions or gameplay state through SQL. The GUI is a separate thin
+administration layer and never owns gameplay state.
