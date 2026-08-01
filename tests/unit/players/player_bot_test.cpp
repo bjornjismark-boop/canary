@@ -11,6 +11,7 @@
 #include "creatures/players/bots/bot_combat.hpp"
 #include "creatures/players/bots/bot_survival.hpp"
 #include "creatures/players/bots/bot_loot.hpp"
+#include "creatures/players/bots/bot_supply.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -519,3 +520,33 @@ TEST(PlayerBotLootTransferTest, CancellationIsTerminal) { EXPECT_FALSE(BotLootTr
 TEST(PlayerBotLootTransferTest, StaleFailuresAreDistinct) { EXPECT_NE(BotLootTransferFailure::StaleCorpse,BotLootTransferFailure::StaleDestination);EXPECT_NE(BotLootTransferOutcome::Partial,BotLootTransferOutcome::NoEffect); }
 TEST(PlayerBotLootTransferTest, InventoryObservationContainsValuesOnly) { BotInventoryObservation o{.revision=1,.freeCapacity=100,.slots={{.slot=3,.itemTypeId=ITEM_BACKPACK,.count=1,.container=true}}};EXPECT_FALSE(o.containsWorldOwnership); }
 TEST(PlayerBotLootTransferTest, DestinationSelectionInputsAreDeterministic) { const auto a=BotLootTransfer::assessCapacity(1000,10,50);const auto b=BotLootTransfer::assessCapacity(1000,10,50);EXPECT_EQ(a,b); }
+
+namespace {
+BotSupplyPolicy supplyPolicy() {
+	return {
+		.rules = { { 7618, BotSupplyCategory::HealthHealing }, { 3447, BotSupplyCategory::Ammunition }, { 268, BotSupplyCategory::Food } },
+		.thresholds = { { BotSupplyCategory::HealthHealing, 5, 0, true }, { BotSupplyCategory::Ammunition, 20, 0, false } },
+	};
+}
+BotSupplyObservation supplyObservation() {
+	return { .revision=1,.inventorySignature=77,.freeCapacity=5000,.entries={
+		{.itemTypeId=7618,.category=BotSupplyCategory::HealthHealing,.count=3,.depth=0,.signature=1},
+		{.itemTypeId=3447,.category=BotSupplyCategory::Ammunition,.count=10,.depth=1,.signature=2},
+		{.itemTypeId=268,.category=BotSupplyCategory::Food,.count=2,.charges=7,.depth=2,.signature=3},
+	}};
+}
+}
+
+TEST(PlayerBotSupplyTest, ObservationAndAssessmentContainValuesOnly) { EXPECT_FALSE(supplyObservation().containsWorldOwnership); EXPECT_TRUE(std::is_trivially_destructible_v<BotSupplyEntry>); }
+TEST(PlayerBotSupplyTest, CategoryCountingIsDeterministic) { const auto r=BotSupply::assess(supplyObservation(),supplyPolicy());ASSERT_EQ(3U,r.totals.size());EXPECT_EQ(std::pair(BotSupplyCategory::HealthHealing,3U),r.totals[0]); }
+TEST(PlayerBotSupplyTest, NestedContainerDepthIsBoundedValueData) { const auto o=supplyObservation();EXPECT_EQ(2,o.entries.back().depth); }
+TEST(PlayerBotSupplyTest, ChargesTakePrecedenceOverStackCount) { const auto r=BotSupply::assess(supplyObservation(),supplyPolicy());EXPECT_EQ(std::pair(BotSupplyCategory::Food,7U),r.totals[2]); }
+TEST(PlayerBotSupplyTest, HealingDepletionRequiresReturn) { auto o=supplyObservation();o.entries[0].count=0;const auto r=BotSupply::assess(o,supplyPolicy());EXPECT_EQ(BotSupplyIntent::NoHealingSupplies,r.intent); }
+TEST(PlayerBotSupplyTest, RequiredAmmunitionDepletionStopsHunt) { auto o=supplyObservation();o.entries.erase(o.entries.begin()+1);o.ammunitionRequired=true;EXPECT_EQ(BotSupplyIntent::NoAmmunition,BotSupply::assess(o,supplyPolicy()).intent); }
+TEST(PlayerBotSupplyTest, CapacityThresholdIsAuthoritative) { auto o=supplyObservation();o.freeCapacity=50;EXPECT_EQ(BotSupplyIntent::CapacityFull,BotSupply::assess(o,supplyPolicy()).intent); }
+TEST(PlayerBotSupplyTest, ConservationThresholdIsDeterministic) { EXPECT_EQ(BotSupplyIntent::Conserve,BotSupply::assess(supplyObservation(),supplyPolicy()).intent); }
+TEST(PlayerBotSupplyTest, StopThresholdIsConfigurable) { auto p=supplyPolicy();p.thresholds[0].stopBelow=3;EXPECT_EQ(BotSupplyIntent::NoHealingSupplies,BotSupply::assess(supplyObservation(),p).intent); }
+TEST(PlayerBotSupplyTest, StaleInventoryIsRejected) { EXPECT_EQ(BotSupplyFailure::ObservationStale,BotSupply::assess(supplyObservation(),supplyPolicy(),78).failure); }
+TEST(PlayerBotSupplyTest, IdenticalInputsProduceIdenticalDecisionValues) { const auto a=BotSupply::assess(supplyObservation(),supplyPolicy());const auto b=BotSupply::assess(supplyObservation(),supplyPolicy());EXPECT_EQ(a.intent,b.intent);EXPECT_EQ(a.reasonScore,b.reasonScore);EXPECT_EQ(a.totals,b.totals); }
+TEST(PlayerBotSupplyTest, TotalsSaturateWithoutOverflow) { auto o=supplyObservation();o.entries={{.itemTypeId=1,.category=BotSupplyCategory::HealthHealing,.count=UINT32_MAX},{.itemTypeId=2,.category=BotSupplyCategory::HealthHealing,.count=UINT32_MAX}};const auto r=BotSupply::assess(o,{});ASSERT_EQ(1U,r.totals.size());EXPECT_EQ(UINT32_MAX,r.totals[0].second); }
+TEST(PlayerBotSupplyTest, AssessmentDoesNotMutateObservation) { const auto o=supplyObservation();const auto before=o;(void)BotSupply::assess(o,supplyPolicy());EXPECT_EQ(before,o); }

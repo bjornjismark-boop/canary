@@ -155,6 +155,14 @@ BotLootTransferResult BotController::executeLoot(const BotLootTransferRequest &r
 
 BotLootExecutionProgress BotController::cancelLoot() { if(lootProgress.state!=BotLootExecutionState::Completed)lootProgress={.state=BotLootExecutionState::Cancelled};return lootProgress; }
 
+BotSupplyAssessment BotController::evaluateSupplies(const BotSupplyPolicy &policy, uint64_t expectedInventorySignature) {
+	const auto controlled = player.lock();
+	if (!controlled || controlled->isRemoved() || controlled->getHealth() <= 0) {
+		return { .urgency = BotSupplyUrgency::Critical, .intent = BotSupplyIntent::ObservationStale, .failure = BotSupplyFailure::InvalidLifecycle };
+	}
+	return BotSupply::assess(BotSupply::observe(controlled, policy), policy, expectedInventorySignature);
+}
+
 BotActionResult BotController::tick(std::chrono::milliseconds now) {
 	lastTickWork = 0;
 	if (now < nextTickAt) {

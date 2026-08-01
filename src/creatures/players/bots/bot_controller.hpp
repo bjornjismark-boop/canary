@@ -11,6 +11,7 @@
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/bots/bot_survival.hpp"
 #include "creatures/players/bots/bot_loot.hpp"
+#include "creatures/players/bots/bot_supply.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -60,6 +61,7 @@ public:
 	[[nodiscard]] BotLootTransferResult executeLoot(const BotLootTransferRequest &, std::chrono::milliseconds now, const BotLootPolicy & = {}, const BotLootTransferPolicy & = {});
 	[[nodiscard]] BotLootExecutionProgress cancelLoot();
 	[[nodiscard]] const BotLootExecutionProgress &getLootProgress() const { return lootProgress; }
+	[[nodiscard]] BotSupplyAssessment evaluateSupplies(const BotSupplyPolicy & = {}, uint64_t expectedInventorySignature = 0);
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;

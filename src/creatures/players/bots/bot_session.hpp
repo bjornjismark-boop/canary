@@ -87,6 +87,7 @@ private:
 	[[nodiscard]] BotDeathResult observeDeath();
 	[[nodiscard]] BotLootSelectionResult evaluateLoot(const Position &position, uint32_t sourceCreatureId, BotCorpseSignature expectedSignature = {}, const BotLootPolicy &policy = {});
 	[[nodiscard]] BotLootTransferResult executeLoot(const BotLootTransferRequest &, std::chrono::milliseconds, const BotLootPolicy &, const BotLootTransferPolicy &);
+	[[nodiscard]] BotSupplyAssessment evaluateSupplies(const BotSupplyPolicy &, uint64_t expectedInventorySignature);
 	[[nodiscard]] bool save() const;
 	[[nodiscard]] bool close(bool savePlayer);
 	[[nodiscard]] bool retryPendingSave();
