@@ -10,6 +10,7 @@
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "creatures/players/bots/bot_resupply.hpp"
 #include "creatures/players/bots/bot_quest_execution.hpp"
+#include "creatures/players/bots/bot_planner.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
 #include "creatures/players/player.hpp"
@@ -1799,6 +1800,7 @@ TEST(PlayerBotIntegrationTest, DialogueConfiguredTopicConfirmationAndFarewellUse
 
 namespace {
 BotQuestDefinition integrationQuest(uint16_t vocationId,const Position &position){return{.id=7001,.visibleName="PlayerBot Visible Quest",.revision=11,.missions={{.id=7002,.visibleName="Visible Mission",.visibleDescription="Kill, collect, visit, and report.",.stateStorage={900100,-1,3},.availableValue=-1,.startedValue=1,.objectiveCompleteValue=2,.completedValue=3,.turnInRequired=true,.prerequisites={{.type=BotQuestPrerequisiteType::MinimumLevel,.value=1},{.type=BotQuestPrerequisiteType::Vocation,.value=vocationId},{.type=BotQuestPrerequisiteType::ItemPresent,.value=1,.itemTypeId=3031},{.type=BotQuestPrerequisiteType::StoragePredicate,.storage={900101,5,5}}},.objectives={{.type=BotQuestObjectiveType::KillCreatureType,.requiredCount=1,.creatureTypeId=77},{.type=BotQuestObjectiveType::CollectItem,.requiredCount=1,.itemTypeId=3031},{.type=BotQuestObjectiveType::VisitLocation,.requiredCount=1,.position=position,.radius=0},{.type=BotQuestObjectiveType::TalkToNpc,.requiredCount=1,.configuredNpcName="playerbotdialoguefixturenpc",.requiredDialogueToken="welcome"}},.rewards={{BotQuestRewardType::ItemReceived,266,1},{BotQuestRewardType::ExperienceIncreased,0,50},{BotQuestRewardType::MissionStateChanged,0,1}}}}};}
+std::vector<BotGoal> integrationPlannerGoals(const Position&region){return{{.id=1,.type=BotGoalType::Survive,.priority=BotGoalPriority::CriticalSurvival,.status=BotGoalStatus::Eligible,.policyRevision=1},{.id=2,.type=BotGoalType::Recover,.priority=BotGoalPriority::DeathRecovery,.status=BotGoalStatus::Eligible,.policyRevision=1},{.id=3,.type=BotGoalType::Resupply,.priority=BotGoalPriority::UrgentResupply,.status=BotGoalStatus::Eligible,.policyRevision=1},{.id=4,.type=BotGoalType::CompleteConfiguredQuest,.priority=BotGoalPriority::ActiveQuest,.status=BotGoalStatus::Eligible,.policyRevision=1,.configuredTargetId=7001,.configuredRegion=region},{.id=5,.type=BotGoalType::HuntConfiguredRegion,.priority=BotGoalPriority::Progression,.status=BotGoalStatus::Eligible,.policyRevision=1,.configuredRegion=region},{.id=6,.type=BotGoalType::IdleSafely,.priority=BotGoalPriority::Idle,.status=BotGoalStatus::Eligible,.policyRevision=1}};}
 }
 
 TEST(PlayerBotIntegrationTest, QuestObservationUsesRealOwnStorageQuestLogAndPrerequisites){PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());auto backpack=Item::CreateItem(ITEM_BACKPACK);ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(player,backpack,CONST_SLOT_BACKPACK,FLAG_NOLIMIT));ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalAddItem(backpack->getContainer(),Item::CreateItem(3031,1),INDEX_WHEREEVER,FLAG_NOLIMIT));player->storage().add(900101,5);auto definition=integrationQuest(player->getVocationId(),fixture.start);auto unavailable=definition;unavailable.missions[0].availableValue=0;EXPECT_EQ(BotMissionState::Unavailable,manager.observeQuest(fixture.name,unavailable).missions.front().state);const auto available=manager.observeQuest(fixture.name,definition);EXPECT_EQ(BotMissionState::Available,available.missions.front().state);EXPECT_EQ("Visible Mission",available.missions.front().visibleName);EXPECT_TRUE(manager.evaluateQuest(fixture.name,7002,definition).eligible());player->storage().add(900100,1);EXPECT_EQ(BotMissionState::Started,manager.observeQuest(fixture.name,definition).missions.front().state);EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());}
@@ -2017,4 +2019,54 @@ TEST(PlayerBotIntegrationTest, QuestExecutionUseStepDelegatesProductionLadderTra
 	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = observation.revision + 2, .authoritativeProgress = true, .missionState = BotMissionState::InProgress });
 	EXPECT_EQ(BotQuestExecutionState::Completed, execution.state);
 	ladderTile->removeThing(ladder, 1); EXPECT_TRUE(manager.logout(fixture.name, false)); ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, LongHorizonPlannerCoordinatesM2ThroughM7AndDeterministicReplans) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	for (int x = 0; x <= 4; ++x) createWalkableTile(Position(fixture.start.x + x, fixture.start.y, fixture.start.z));
+	BotManager manager(g_game()); const auto session = loginBotOrReport(manager, fixture.name); ASSERT_NE(nullptr, session);
+	auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	auto backpack = Item::CreateItem(ITEM_BACKPACK); ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(player, backpack, CONST_SLOT_BACKPACK, FLAG_NOLIMIT));
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(backpack->getContainer(), Item::CreateItem(3031, 1), INDEX_WHEREEVER, FLAG_NOLIMIT)); player->storage().add(900101, 5);
+	const Position region(fixture.start.x + 2, fixture.start.y, fixture.start.z);
+	auto goals = integrationPlannerGoals(region);
+	BotPlannerObservation observation { .revision = 1, .sessionGeneration = 1, .activeQuest = true, .progressionConfigured = true };
+	auto decision = BotPlanner::select(goals, observation); ASSERT_EQ(BotGoalType::CompleteConfiguredQuest, decision.goalType); ASSERT_LE(decision.plan.steps.size(), BotPlannerPolicy{}.maximumSteps);
+	EXPECT_NE(decision.plan.steps.end(), std::ranges::find(decision.plan.steps, BotPlanStepType::Travel, &BotPlanStep::type));
+	EXPECT_NE(decision.plan.steps.end(), std::ranges::find(decision.plan.steps, BotPlanStepType::Fight, &BotPlanStep::type));
+	EXPECT_NE(decision.plan.steps.end(), std::ranges::find(decision.plan.steps, BotPlanStepType::Loot, &BotPlanStep::type));
+	EXPECT_NE(decision.plan.steps.end(), std::ranges::find(decision.plan.steps, BotPlanStepType::Converse, &BotPlanStep::type));
+	decision = BotPlanner::verifyStep(decision, 0, 2, true); ASSERT_EQ(1, decision.checkpoint.verifiedStepIndex);
+
+	auto route = manager.startRoute(fixture.name, region, std::chrono::milliseconds(1)); for(uint8_t i=0;i<8&&route.state!=BotRouteState::Arrived;++i) route=manager.advanceRoute(fixture.name,std::chrono::milliseconds(100+i*100)); ASSERT_EQ(BotRouteState::Arrived, route.state);
+	decision = BotPlanner::verifyStep(decision, 1, 3, true); ASSERT_EQ(2, decision.checkpoint.verifiedStepIndex);
+	const auto npc = createPlayerBotDialogueNpc(Position(fixture.start.x + 3, fixture.start.y, fixture.start.z)); ASSERT_NE(nullptr, npc); const auto dialoguePolicy = integrationDialoguePolicy();
+	(void)manager.advanceDialogue(fixture.name,npc->getID(),BotDialogueIntent::Greeting,std::chrono::milliseconds(1000),dialoguePolicy); ASSERT_EQ(BotDialogueResponse::GreetingAccepted,manager.advanceDialogue(fixture.name,npc->getID(),BotDialogueIntent::Greeting,std::chrono::milliseconds(1001),dialoguePolicy).response);
+	decision = BotPlanner::verifyStep(decision, 2, 4, true); ASSERT_EQ(3, decision.checkpoint.verifiedStepIndex); (void)manager.cancelDialogue(fixture.name); ASSERT_TRUE(g_game().removeCreature(npc,true));
+
+	auto monsterType=std::make_shared<MonsterType>("PlannerMonster");monsterType->info.health=10;monsterType->info.healthMax=10;monsterType->info.experience=5;monsterType->info.lookcorpse=3994;auto monster=std::make_shared<Monster>(monsterType);const Position monsterPosition(region.x+1,region.y,region.z);ASSERT_TRUE(g_game().placeCreature(monster,monsterPosition,false,true));ASSERT_EQ(monster->getID(),manager.evaluateCombat(fixture.name).selectedCreatureId);const auto perception=BotPerception::observe(player);ASSERT_TRUE(perception);const auto combat=BotCombat::observe(player,*perception);ASSERT_TRUE(combat);const auto target=std::ranges::find(combat->creatures,monster->getID(),&BotCombatCreatureObservation::id);ASSERT_NE(combat->creatures.end(),target);ASSERT_EQ(BotCombatExecutionOutcome::TargetAcquired,manager.executeCombat(fixture.name,{monster->getID(),combat->revision,target->signature,player->getPosition()},std::chrono::milliseconds(1100)).outcome);const auto monsterId=monster->getID();CombatDamage fatal;fatal.primary={COMBAT_PHYSICALDAMAGE,-100};ASSERT_TRUE(g_game().combatChangeHealth(player,monster,fatal));monster->onDeath();ASSERT_TRUE(monster->isRemoved());decision=BotPlanner::verifyStep(decision,3,5,true);ASSERT_EQ(4,decision.checkpoint.verifiedStepIndex);
+	const auto corpseTile=g_game().map.getTile(monsterPosition);ASSERT_NE(nullptr,corpseTile);std::shared_ptr<Item> corpse;for(const auto&item:*corpseTile->getItemList())if(item&&item->isCorpse()&&item->getContainer()){corpse=item;break;}ASSERT_NE(nullptr,corpse);corpse->getContainer()->internalAddThing(Item::CreateItem(3031,1));BotLootPolicy lootPolicy{.rules={{{.itemTypeId=3031,.valueCategory=1,.priority=1}}}};const auto selected=manager.evaluateLoot(fixture.name,monsterPosition,monsterId,{},lootPolicy);ASSERT_TRUE(selected.selected);BotLootTransferRequest lootRequest{.corpsePosition=monsterPosition,.sourceCreatureId=monsterId,.corpseSignature=selected.corpse.signature,.itemTypeId=3031,.itemSignature=selected.selected->item.signature,.count=1};EXPECT_EQ(BotLootTransferOutcome::Pending,manager.executeLoot(fixture.name,lootRequest,std::chrono::milliseconds(1200),lootPolicy).outcome);EXPECT_EQ(BotLootTransferOutcome::Succeeded,manager.executeLoot(fixture.name,lootRequest,std::chrono::milliseconds(1201),lootPolicy).outcome);decision=BotPlanner::verifyStep(decision,4,6,true);ASSERT_EQ(5,decision.checkpoint.verifiedStepIndex);
+	const auto quest=manager.observeQuest(fixture.name,integrationQuest(player->getVocationId(),region),{{.type=BotQuestObjectiveType::KillCreatureType,.subjectId=77,.count=1,.revision=monsterId}});EXPECT_EQ(7001,quest.questId);decision=BotPlanner::verifyStep(decision,5,7,true);ASSERT_EQ(6,decision.checkpoint.verifiedStepIndex);
+
+	ASSERT_EQ(RETURNVALUE_NOERROR,g_game().internalRemoveItem(corpse));BotSupplyPolicy supplyPolicy{.rules={{3031,BotSupplyCategory::HealthHealing}},.thresholds={{BotSupplyCategory::HealthHealing,1,0,true}}};EXPECT_NE(BotSupplyIntent::NoHealingSupplies,manager.evaluateSupplies(fixture.name,supplyPolicy).intent);
+	auto replanObservation=observation;replanObservation.revision=8;replanObservation.supplyUrgent=true;auto resupply=BotPlanner::replan(goals,replanObservation,decision,BotReplanReason::SupplyDepleted);EXPECT_EQ(BotGoalType::Resupply,resupply.goalType);
+	replanObservation.revision=9;replanObservation.supplyUrgent=false;replanObservation.survivalCritical=true;auto survival=BotPlanner::replan(goals,replanObservation,resupply,BotReplanReason::SurvivalOverride);EXPECT_EQ(BotGoalType::Survive,survival.goalType);
+	replanObservation.revision=10;replanObservation.survivalCritical=false;replanObservation.activeQuest=true;auto resumed=BotPlanner::replan(goals,replanObservation,survival,BotReplanReason::QuestStateChanged);EXPECT_EQ(BotGoalType::CompleteConfiguredQuest,resumed.goalType);
+	replanObservation.revision=11;replanObservation.routeAvailable=false;EXPECT_EQ(BotReplanReason::RouteUnavailable,BotPlanner::replan(goals,replanObservation,resumed,BotReplanReason::RouteUnavailable).replanReason);
+	EXPECT_FALSE(resumed.containsWorldOwnership());EXPECT_TRUE(manager.logout(fixture.name,false));ASSERT_TRUE(fixture.cleanup());EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, LongHorizonPlannerReconstructsOnlyVerifiedSafeCheckpointsWithoutGameplayMutation) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game());
+	const auto firstSession = loginBotOrReport(manager, fixture.name); ASSERT_NE(nullptr, firstSession); auto firstPlayer = std::const_pointer_cast<Player>(firstSession->getPlayer());
+	const auto storageBefore = firstPlayer->getStorageValue(900100); const auto experienceBefore = firstPlayer->getExperience(); const auto itemBefore = std::static_pointer_cast<Cylinder>(firstPlayer)->getItemTypeCount(2160);
+	auto goals = integrationPlannerGoals(fixture.start); BotPlannerObservation initial { .revision = 1, .sessionGeneration = 1, .progressionConfigured = true };
+	auto decision = BotPlanner::select(goals, initial); ASSERT_EQ(BotGoalType::HuntConfiguredRegion, decision.goalType); decision = BotPlanner::verifyStep(decision, 0, 2, true); ASSERT_TRUE(decision.checkpoint.safeSaveBoundary);
+	EXPECT_EQ(storageBefore, firstPlayer->getStorageValue(900100)); EXPECT_EQ(experienceBefore, firstPlayer->getExperience()); EXPECT_EQ(itemBefore, std::static_pointer_cast<Cylinder>(firstPlayer)->getItemTypeCount(2160));
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	const auto secondSession = loginBotOrReport(manager, fixture.name); ASSERT_NE(nullptr, secondSession); BotPlannerObservation rebuilt { .revision = 3, .sessionGeneration = 2, .progressionConfigured = true };
+	const auto resumed = BotPlanner::reconstruct(decision, rebuilt); EXPECT_EQ(BotGoalStatus::Active, resumed.status); EXPECT_EQ(2, resumed.checkpoint.sessionGeneration); EXPECT_EQ(1, resumed.checkpoint.verifiedStepIndex);
+	auto invalidObservation = rebuilt; invalidObservation.revision = 4; invalidObservation.checkpointValid = false; const auto invalid = BotPlanner::reconstruct(decision, invalidObservation); EXPECT_EQ(BotPlannerFailure::CheckpointInvalid, invalid.failure);
+	const auto replanned = BotPlanner::replan(goals, invalidObservation, invalid, BotReplanReason::CheckpointInvalid); EXPECT_EQ(BotReplanReason::CheckpointInvalid, replanned.replanReason); EXPECT_EQ(0, replanned.checkpoint.verifiedStepIndex);
+	EXPECT_FALSE(resumed.containsWorldOwnership()); EXPECT_TRUE(manager.logout(fixture.name, false)); ASSERT_TRUE(fixture.cleanup()); EXPECT_FALSE(fixture.hasCommittedRows());
 }
