@@ -250,6 +250,19 @@ int CanaryServer::run() {
 				// No administrative transport is opened by default. A future server-internal
 				// adapter must explicitly select localhost or a Unix socket and provide authentication.
 				botAdminService = std::make_unique<BotFleetAdminService>(*botAdministration, *botTelemetry);
+				if (const char* soakOutput = std::getenv("PLAYERBOTS_SOAK_OUTPUT"); soakOutput && *soakOutput) {
+					const char* soakBots = std::getenv("PLAYERBOTS_SOAK_BOTS");
+					if (!soakBots || !*soakBots) throw FailedToInitializeCanary("PlayerBot soak population is required in soak mode");
+					const auto parsed = std::stoul(soakBots);
+					if (parsed == 0 || parsed > BotFleetHardening::AbsoluteMaximumManagedBots) throw FailedToInitializeCanary("PlayerBot soak population is outside hard bounds");
+					BotFleetResourcePolicy soakResources;
+					soakResources.maximumManagedBots = static_cast<uint32_t>(parsed);
+					if (!botManager->configureFleetResources(soakResources)) throw FailedToInitializeCanary("PlayerBot soak resource bounds are invalid");
+					botSoakAdapter = std::make_unique<BotFleetLocalSoakAdapter>(soakOutput, *botManager, *botAdministration, *botTelemetry);
+					if (!botSoakAdapter->valid()) throw FailedToInitializeCanary("PlayerBot soak output must be an existing private directory");
+					g_dispatcher().setSoakTelemetryEnabled(true);
+					scheduleBotSoakSample();
+				}
 				if (std::filesystem::exists(fleetConfigurationPath)) {
 					const auto fleetConfiguration = BotFleetConfiguration::load(fleetConfigurationPath);
 					if (!fleetConfiguration.success() || botAdministration->install(*botManager, fleetConfiguration.revision) != BotFleetConfigurationFailure::None) {
@@ -645,6 +658,11 @@ void CanaryServer::modulesLoadHelper(bool loaded, std::string_view identifier) {
 }
 
 void CanaryServer::shutdown() {
+	if (botSoakEventId != 0) g_dispatcher().stopEvent(botSoakEventId);
+	botSoakEventId = 0;
+	g_dispatcher().setSoakTelemetryEnabled(false);
+	if (botSoakAdapter) botSoakAdapter->stop();
+	botSoakAdapter.reset();
 	if (botManager) {
 		if (botAdminService) botAdminService->stop();
 		botAdminService.reset();
@@ -660,4 +678,14 @@ void CanaryServer::shutdown() {
 	g_dispatcher().shutdown();
 	g_metrics().shutdown();
 	g_threadPool().shutdown();
+}
+
+void CanaryServer::scheduleBotSoakSample() {
+	if (!botSoakAdapter || !botSoakAdapter->valid() || botSoakEventId != 0) return;
+	botSoakEventId = g_dispatcher().scheduleEvent(1000, [this] {
+		botSoakEventId = 0;
+		if (!botSoakAdapter || !botSoakAdapter->valid()) return;
+		botSoakAdapter->sample(g_dispatcher().snapshotSoakTaskLatency(), static_cast<uint64_t>(OTSYS_TIME()));
+		scheduleBotSoakSample();
+	}, "CanaryServer::playerbotsSoakSample", DispatcherLane::Maintenance);
 }

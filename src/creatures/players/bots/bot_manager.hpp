@@ -96,6 +96,10 @@ public:
 	[[nodiscard]] const BotFleetControllerStateValue &fleetState() const { return fleetController; }
 	[[nodiscard]] const BotFleetReconciliation &lastFleetReconciliation() const { return lastFleetResult; }
 	[[nodiscard]] const BotFleetLoadSheddingDecision &lastFleetLoadShedding() const { return fleetLoadShedding; }
+	[[nodiscard]] const BotFleetPopulationPolicy &fleetPopulationPolicy() const { return fleetPopulation; }
+	[[nodiscard]] const std::unordered_map<BotFleetMemberId, BotFleetObservation> &fleetObservations() const { return fleetLifecycle; }
+	[[nodiscard]] size_t fleetMemberCount() const { return fleetMembers.size(); }
+	[[nodiscard]] uint32_t ordinaryPlayerCount() const;
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

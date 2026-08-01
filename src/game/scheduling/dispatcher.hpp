@@ -175,6 +175,15 @@ public:
 	[[nodiscard]] DispatcherLoadState getLoadState() const noexcept {
 		return adaptiveBudgetController.getState();
 	}
+	// Independent bounded histogram for the explicitly enabled local soak
+	// observer. Snapshotting it never resets normal dispatcher telemetry.
+	[[nodiscard]] dispatcher::telemetry::LatencySnapshot snapshotSoakTaskLatency() noexcept {
+		return soakTaskRuntimeTelemetry.snapshotAndReset();
+	}
+	void setSoakTelemetryEnabled(bool enabled) noexcept {
+		soakTelemetryEnabled.store(enabled, std::memory_order_release);
+		if (!enabled) soakTaskRuntimeTelemetry.reset();
+	}
 
 	void stopEvent(uint64_t eventId);
 
@@ -230,6 +239,8 @@ private:
 	bool reserveDispatcherSlot(Task &task);
 	void releaseDispatcherSlot(Task &task);
 	void observeLaneRejection(DispatcherLane lane, size_t capacity = DISPATCHER_LANE_QUEUE_CAPACITY);
+	dispatcher::telemetry::ConcurrentLatencyHistogram soakTaskRuntimeTelemetry;
+	std::atomic_bool soakTelemetryEnabled = false;
 
 	void notify() {
 		if (!hasPendingTasks) {

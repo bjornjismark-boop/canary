@@ -17,6 +17,7 @@ class BotManager;
 class BotFleetAdministration;
 class BotFleetTelemetry;
 class BotFleetAdminService;
+class BotFleetLocalSoakAdapter;
 
 class FailedToInitializeCanary : public std::exception {
 private:
@@ -59,6 +60,8 @@ private:
 	std::unique_ptr<BotFleetAdministration> botAdministration;
 	std::unique_ptr<BotFleetTelemetry> botTelemetry;
 	std::unique_ptr<BotFleetAdminService> botAdminService;
+	std::unique_ptr<BotFleetLocalSoakAdapter> botSoakAdapter;
+	uint64_t botSoakEventId = 0;
 
 	LoaderStatus loaderStatus = LoaderStatus::LOADING;
 	std::mutex loaderMutex;
@@ -80,5 +83,6 @@ private:
 	void setWorldType();
 	void loadMaps() const;
 	void setupHousesRent();
+	void scheduleBotSoakSample();
 	void modulesLoadHelper(bool loaded, std::string_view identifier);
 };

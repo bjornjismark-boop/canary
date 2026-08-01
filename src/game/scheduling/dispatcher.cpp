@@ -294,15 +294,15 @@ bool Dispatcher::executeTask(const Task &task, DispatcherLane lane) {
 	dispacherContext.lane = task.getMeta().lane;
 	dispacherContext.executionMode = task.getMeta().executionMode;
 	const auto telemetryEnabled = queueLatencyLoggingEnabled.load(std::memory_order_relaxed);
-	if (!telemetryEnabled) {
-		return task.execute();
-	}
-
+	const auto soakTelemetryActive = soakTelemetryEnabled.load(std::memory_order_relaxed);
+	if (!telemetryEnabled && !soakTelemetryActive) return task.execute();
 	const auto startedAt = policy.now();
-	observeTaskStart(task, lane, startedAt);
+	if (telemetryEnabled) observeTaskStart(task, lane, startedAt);
 	const auto executed = task.execute();
+	const auto runtime = policy.elapsedSince(startedAt);
+	if (soakTelemetryActive) soakTaskRuntimeTelemetry.observe(runtime);
 	if (telemetryEnabled) {
-		laneTelemetry[static_cast<size_t>(lane)].taskRuntime.observe(policy.elapsedSince(startedAt), 1, task.getContext());
+		laneTelemetry[static_cast<size_t>(lane)].taskRuntime.observe(runtime, 1, task.getContext());
 	}
 	return executed;
 }

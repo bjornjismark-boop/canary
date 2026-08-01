@@ -374,6 +374,12 @@ void BotManager::clearCoordination() {
 	coordinationGroups.clear();
 }
 
+uint32_t BotManager::ordinaryPlayerCount() const {
+	return static_cast<uint32_t>(std::ranges::count_if(game.getPlayers(), [](const auto &entry) {
+		return entry.second && entry.second->isNetworkControlled();
+	}));
+}
+
 BotFleetFailure BotManager::configureFleet(BotFleetPopulationPolicy population, BotFleetDistributionPolicy distribution, std::vector<BotFleetMemberProfile> members, uint32_t intervalTicks) {
 	if (const auto failure = BotFleet::validate(population); failure != BotFleetFailure::None) return failure;
 	if (const auto failure = BotFleet::validate(distribution, members); failure != BotFleetFailure::None) return failure;

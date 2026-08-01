@@ -8,11 +8,13 @@
 
 #include "creatures/players/bots/bot_fleet_configuration.hpp"
 #include "creatures/players/bots/bot_fleet_hardening.hpp"
+#include "game/scheduling/dispatcher_telemetry.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <array>
 	#include <deque>
 	#include <functional>
+	#include <filesystem>
 	#include <memory>
 	#include <string>
 #endif
@@ -30,7 +32,12 @@ struct BotFleetTelemetrySnapshot {
 	BotFleetPressureState pressureState = BotFleetPressureState::Normal;
 	BotFleetFailure reconciliationFailure = BotFleetFailure::None;
 	uint32_t managedSessions = 0;
+	uint32_t desiredPopulation = 0;
+	uint32_t hardMaximum = 0;
+	uint32_t ordinaryPlayers = 0;
 	uint32_t placed = 0;
+	std::array<uint32_t, static_cast<size_t>(BotFleetMemberState::Failed) + 1> lifecycleCounts {};
+	uint32_t duplicateSessions = 0;
 	uint32_t pendingLogins = 0;
 	uint32_t pendingLogouts = 0;
 	uint32_t plannerHealthy = 0;
@@ -113,4 +120,26 @@ private:
 	uint64_t activeWindow = 0;
 	uint16_t requestsInWindow = 0;
 	bool stopping = false;
+};
+
+// Explicit soak-mode, local-filesystem-only adapter. It is never constructed
+// unless Canary receives PLAYERBOTS_SOAK_OUTPUT. All calls run on the dispatcher
+// thread and only copy value snapshots or enqueue normal M9C commands.
+class BotFleetLocalSoakAdapter final {
+public:
+	static constexpr uintmax_t MaximumCommandFileBytes = 1024 * 1024;
+	BotFleetLocalSoakAdapter(std::filesystem::path, BotManager &, BotFleetAdministration &, BotFleetTelemetry &);
+	[[nodiscard]] bool valid() const { return enabled; }
+	void sample(const dispatcher::telemetry::LatencySnapshot &, uint64_t timestampMilliseconds);
+	void stop();
+
+private:
+	void pollCommands(uint64_t timestampMilliseconds);
+	std::filesystem::path directory;
+	BotManager &manager;
+	BotFleetAdministration &administration;
+	BotFleetTelemetry &telemetry;
+	uintmax_t commandOffset = 0;
+	std::deque<uint64_t> requestIds;
+	bool enabled = false;
 };
