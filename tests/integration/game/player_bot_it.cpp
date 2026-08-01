@@ -1817,6 +1817,24 @@ TEST(PlayerBotIntegrationTest, QuestExecutionDelegatesRealTravelDialogueAndVerif
 
 TEST(PlayerBotIntegrationTest, QuestExecutionSurvivalDeathAndSessionReconstructionAreBounded){PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);const auto player=std::const_pointer_cast<Player>(session->getPlayer());auto definition=integrationQuest(player->getVocationId(),fixture.start);const auto observation=manager.observeQuest(fixture.name,definition);BotQuestPlan plan{.questId=definition.id,.missionId=7002,.revision=2,.steps={{.type=BotQuestStepType::TravelRegion,.region=fixture.start}}};auto execution=BotQuestExecution::start(plan,observation,{});auto suspended=BotQuestExecution::advance(plan,execution,{.revision=observation.revision+1,.survivalRequired=true});EXPECT_EQ(BotQuestExecutionState::Suspended,suspended.state);auto resumed=BotQuestExecution::advance(plan,suspended,{.revision=observation.revision+2,.regionReached=true});EXPECT_EQ(BotQuestExecutionState::Completed,resumed.state);auto dead=BotQuestExecution::advance(plan,execution,{.revision=observation.revision+1,.dead=true});EXPECT_EQ(BotQuestExecutionState::Dead,dead.state);EXPECT_FALSE(dead.containsWorldOwnership());EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_EQ(nullptr,session->getQuestObservation());ASSERT_TRUE(fixture.cleanup());EXPECT_FALSE(fixture.hasCommittedRows());}
 
+TEST(PlayerBotIntegrationTest, QuestVerifiedCheckpointReconstructsAfterFreshSessionObservation) {
+	PlayerBotDatabaseFixture fixture(g_database()); createWalkableTile(fixture.start); BotManager manager(g_game());
+	const auto firstSession = loginBotOrReport(manager, fixture.name); ASSERT_NE(nullptr, firstSession);
+	const auto firstPlayer = std::const_pointer_cast<Player>(firstSession->getPlayer());
+	auto definition = integrationQuest(firstPlayer->getVocationId(), fixture.start);
+	const auto firstObservation = manager.observeQuest(fixture.name, definition);
+	BotQuestPlan plan { .questId = 7001, .missionId = 7002, .revision = 3, .steps = { { .type = BotQuestStepType::TravelRegion, .region = fixture.start }, { .type = BotQuestStepType::Finish } } };
+	auto execution = manager.startQuestExecution(fixture.name, plan); ASSERT_EQ(BotQuestExecutionState::Traveling, execution.state);
+	execution = manager.advanceQuestExecution(fixture.name, plan, { .revision = firstObservation.revision + 1, .regionReached = true, .missionState = BotMissionState::Available });
+	ASSERT_EQ(1, execution.checkpoint.verifiedStepIndex); const auto checkpoint = execution.checkpoint;
+	EXPECT_TRUE(manager.logout(fixture.name, false)); EXPECT_EQ(nullptr, firstSession->getQuestExecution());
+	const auto secondSession = loginBotOrReport(manager, fixture.name); ASSERT_NE(nullptr, secondSession);
+	definition.revision += 2; const auto fresh = manager.observeQuest(fixture.name, definition); ASSERT_GT(fresh.revision, checkpoint.observationRevision);
+	auto reconstructed = BotQuestExecution::reconstruct(plan, checkpoint, fresh); EXPECT_EQ(BotQuestExecutionState::Checkpointing, reconstructed.state); EXPECT_EQ(1, reconstructed.checkpoint.verifiedStepIndex);
+	reconstructed = BotQuestExecution::advance(plan, reconstructed, { .revision = fresh.revision + 1, .authoritativeProgress = true, .missionState = BotMissionState::Available }); EXPECT_EQ(BotQuestExecutionState::Completed, reconstructed.state);
+	EXPECT_TRUE(manager.logout(fixture.name, false)); ASSERT_TRUE(fixture.cleanup()); EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
 TEST(PlayerBotIntegrationTest, QuestExecutionCompletesOrdinaryMultiNpcKillCollectHandInAndRewardFlow) {
 	PlayerBotDatabaseFixture fixture(g_database());
 	for (int x = 0; x <= 6; ++x) createWalkableTile(Position(fixture.start.x + x, fixture.start.y, fixture.start.z));

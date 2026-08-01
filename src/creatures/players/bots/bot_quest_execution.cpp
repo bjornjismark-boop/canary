@@ -33,6 +33,14 @@ BotQuestExecutionResult BotQuestExecution::start(const BotQuestPlan &plan, const
 	result.state = stateFor(plan.steps.front().type); result.stepResult = BotQuestStepResult::Pending; return result;
 }
 
+BotQuestExecutionResult BotQuestExecution::reconstruct(const BotQuestPlan &plan, BotQuestCheckpoint checkpoint, const BotQuestObservation &observation, const BotQuestExecutionPolicy &policy) {
+	BotQuestExecutionResult result { .state = BotQuestExecutionState::CheckingPrerequisites, .checkpoint = checkpoint };
+	if (observation.revision == 0 || observation.revision <= checkpoint.observationRevision) { result.state = BotQuestExecutionState::Failed; result.failure = BotQuestExecutionFailure::ObservationStale; return result; }
+	if (plan.questId != observation.questId || checkpoint.questId != plan.questId || checkpoint.missionId != plan.missionId || checkpoint.planRevision != plan.revision || checkpoint.verifiedStepIndex > plan.steps.size() || plan.steps.size() > policy.maximumSteps) { result.state = BotQuestExecutionState::Failed; result.failure = BotQuestExecutionFailure::InvalidPlan; return result; }
+	result.checkpoint.observationRevision = observation.revision; result.checkpoint.retryCount = 0; result.checkpoint.retryDeadline = 0; result.failure = BotQuestExecutionFailure::None;
+	result.state = checkpoint.verifiedStepIndex == plan.steps.size() ? BotQuestExecutionState::Completed : stateFor(plan.steps[checkpoint.verifiedStepIndex].type); return result;
+}
+
 BotQuestExecutionResult BotQuestExecution::retry(BotQuestExecutionResult result, BotQuestStepResult failure, const BotQuestExecutionPolicy &policy, uint64_t now) {
 	if (result.checkpoint.retryCount >= policy.maximumRetries) { result.state = BotQuestExecutionState::Failed; result.stepResult = BotQuestStepResult::RetryExhausted; result.failure = BotQuestExecutionFailure::RetryExhausted; return result; }
 	++result.checkpoint.retryCount; const auto shift=std::min<uint8_t>(result.checkpoint.retryCount-1,8);const auto delay=std::min<uint64_t>(policy.maximumBackoff,policy.retryBackoff>UINT64_MAX>>shift?policy.maximumBackoff:policy.retryBackoff<<shift);result.checkpoint.retryDeadline=now>UINT64_MAX-delay?UINT64_MAX:now+delay;result.state = BotQuestExecutionState::Backoff; result.stepResult = BotQuestStepResult::RetryScheduled; result.failure = BotQuestExecutionFailure::None; (void)failure; return result;

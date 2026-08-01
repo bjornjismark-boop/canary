@@ -102,6 +102,7 @@ class BotQuestExecution final {
 public:
 	[[nodiscard]] static BotQuestExecutionResult start(const BotQuestPlan &, const BotQuestObservation &, const BotQuestEligibility &, const BotQuestExecutionPolicy & = {});
 	[[nodiscard]] static BotQuestExecutionResult advance(const BotQuestPlan &, BotQuestExecutionResult, const BotQuestStepObservation &, const BotQuestExecutionPolicy & = {});
+	[[nodiscard]] static BotQuestExecutionResult reconstruct(const BotQuestPlan &, BotQuestCheckpoint, const BotQuestObservation &, const BotQuestExecutionPolicy & = {});
 	[[nodiscard]] static BotQuestExecutionResult retry(BotQuestExecutionResult, BotQuestStepResult, const BotQuestExecutionPolicy & = {}, uint64_t now = 0);
 	[[nodiscard]] static BotQuestExecutionState stateFor(BotQuestStepType);
 };
