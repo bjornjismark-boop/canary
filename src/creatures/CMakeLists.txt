@@ -53,6 +53,8 @@ target_sources(
 			players/bots/bot_planner_persistence.hpp
 			players/bots/bot_progression.cpp
 			players/bots/bot_progression.hpp
+			players/bots/bot_coordination.cpp
+			players/bots/bot_coordination.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp

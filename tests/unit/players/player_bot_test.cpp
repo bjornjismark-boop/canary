@@ -23,6 +23,7 @@
 #include "creatures/players/bots/bot_plan_execution.hpp"
 #include "creatures/players/bots/bot_planner_persistence.hpp"
 #include "creatures/players/bots/bot_progression.hpp"
+#include "creatures/players/bots/bot_coordination.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -975,3 +976,25 @@ TEST(PlayerBotPlannerPersistenceTest,UnsupportedOldMigrationIsRejected){auto c=p
 TEST(PlayerBotPlannerPersistenceTest,FutureMigrationIsRejected){auto c=persistedCheckpoint();c.schemaVersion=3;c.checksum=BotPlannerPersistence::checksum(c);EXPECT_EQ(BotPlannerMigrationResult::UnsupportedFutureVersion,BotPlannerPersistence::migrate(c,10).result);}
 TEST(PlayerBotPlannerPersistenceTest,CorruptMigrationIsRejected){auto c=persistedCheckpoint();++c.checksum;EXPECT_EQ(BotPlannerMigrationResult::Corrupt,BotPlannerPersistence::migrate(c,10).result);}
 TEST(PlayerBotPlannerPersistenceTest,MigrationPlayerMismatchIsRejected){EXPECT_EQ(BotPlannerMigrationResult::PlayerMismatch,BotPlannerPersistence::migrate(persistedCheckpoint(),11).result);}
+
+namespace{BotCoordinationPolicy coordinationPolicy(){return{.id=1,.configuredMembers={30,10,20},.configuredLeader=20,.revision=1};}BotCoordinationGroupObservation coordinationObservation(){return{.id=1,.revision=1,.members={{.id=10,.sessionGeneration=1,.revision=1,.vocationId=1,.configured=true,.partyMember=true,.playerBot=true},{.id=20,.sessionGeneration=1,.revision=1,.vocationId=3,.configured=true,.partyMember=true,.playerBot=true},{.id=30,.sessionGeneration=1,.revision=1,.vocationId=2,.configured=true,.partyMember=true,.playerBot=true}}};}BotCoordinationReservation reservation(uint32_t member=10,uint64_t target=99){return{.groupId=1,.memberId=member,.type=BotCoordinationReservationType::CombatTarget,.targetSignature=target,.observationRevision=1,.sessionGeneration=1,.expiresAt=10,.policyRevision=1};}}
+TEST(PlayerBotCoordinationTest,ContractsContainValuesOnly){EXPECT_FALSE(coordinationObservation().containsWorldOwnership);EXPECT_FALSE(BotCoordination::evaluate(coordinationPolicy(),coordinationObservation()).directGameplayAction);}
+TEST(PlayerBotCoordinationTest,ConfiguredMembershipExcludesUnrelatedBot){auto o=coordinationObservation();o.members.push_back({.id=40,.configured=false,.playerBot=true});EXPECT_EQ(3,BotCoordination::evaluate(coordinationPolicy(),o).roles.size());}
+TEST(PlayerBotCoordinationTest,HumanPlayerIsNeverControlled){auto o=coordinationObservation();o.members[0].playerBot=false;EXPECT_EQ(2,BotCoordination::evaluate(coordinationPolicy(),o).roles.size());}
+TEST(PlayerBotCoordinationTest,ExplicitLeaderIsSelected){EXPECT_EQ(20,BotCoordination::evaluate(coordinationPolicy(),coordinationObservation()).leaderId);}
+TEST(PlayerBotCoordinationTest,FallbackLeaderUsesStableId){auto p=coordinationPolicy();p.configuredLeader=99;EXPECT_EQ(10,BotCoordination::evaluate(p,coordinationObservation()).leaderId);}
+TEST(PlayerBotCoordinationTest,DeadMemberCannotLead){auto o=coordinationObservation();o.members[1].alive=false;EXPECT_EQ(10,BotCoordination::evaluate(coordinationPolicy(),o).leaderId);}
+TEST(PlayerBotCoordinationTest,RemovedMemberCannotLead){auto o=coordinationObservation();o.members[1].placed=false;EXPECT_EQ(10,BotCoordination::evaluate(coordinationPolicy(),o).leaderId);}
+TEST(PlayerBotCoordinationTest,LeaderChangeBudgetDegradesSafely){auto p=coordinationPolicy();p.configuredLeader=10;p.maximumLeaderChanges=0;EXPECT_EQ(BotCoordinationState::Degraded,BotCoordination::evaluate(p,coordinationObservation(),20,0).state);}
+TEST(PlayerBotCoordinationTest,RolesAreDeterministic){EXPECT_EQ(BotCoordination::evaluate(coordinationPolicy(),coordinationObservation()),BotCoordination::evaluate(coordinationPolicy(),coordinationObservation()));}
+TEST(PlayerBotCoordinationTest,GroupSizeIsBounded){auto p=coordinationPolicy();p.maximumMembers=2;EXPECT_EQ(BotCoordinationFailure::MemberLimit,BotCoordination::evaluate(p,coordinationObservation()).failure);}
+TEST(PlayerBotCoordinationTest,ReservationConflictIsAdvisory){std::vector<BotCoordinationReservation>r;auto p=coordinationPolicy();EXPECT_EQ(BotCoordinationFailure::None,BotCoordination::reserve(r,reservation(),p,0));EXPECT_EQ(BotCoordinationFailure::Conflict,BotCoordination::reserve(r,reservation(20),p,0));}
+TEST(PlayerBotCoordinationTest,FocusFirePermitsSharedCombatIntent){std::vector<BotCoordinationReservation>r;auto p=coordinationPolicy();p.focusFire=true;BotCoordination::reserve(r,reservation(),p,0);EXPECT_EQ(BotCoordinationFailure::None,BotCoordination::reserve(r,reservation(20),p,0));}
+TEST(PlayerBotCoordinationTest,CorpseReservationConflictIsExclusive){std::vector<BotCoordinationReservation>r;auto p=coordinationPolicy();auto a=reservation();a.type=BotCoordinationReservationType::LootCorpse;auto b=a;b.memberId=20;BotCoordination::reserve(r,a,p,0);EXPECT_EQ(BotCoordinationFailure::Conflict,BotCoordination::reserve(r,b,p,0));}
+TEST(PlayerBotCoordinationTest,ReservationCountIsBounded){std::vector<BotCoordinationReservation>r;auto p=coordinationPolicy();p.maximumReservations=1;BotCoordination::reserve(r,reservation(),p,0);EXPECT_EQ(BotCoordinationFailure::ReservationLimit,BotCoordination::reserve(r,reservation(20,100),p,0));}
+TEST(PlayerBotCoordinationTest,ReservationsExpireFinitely){std::vector<BotCoordinationReservation>r{reservation()};BotCoordination::expire(r,10);EXPECT_TRUE(r.empty());}
+TEST(PlayerBotCoordinationTest,DeathOrLogoutInvalidatesReservations){std::vector<BotCoordinationReservation>r{reservation()};BotCoordination::invalidate(r,10);EXPECT_TRUE(r.empty());}
+TEST(PlayerBotCoordinationTest,GenerationChangeInvalidatesReservations){std::vector<BotCoordinationReservation>r{reservation()};BotCoordination::invalidate(r,10,2);EXPECT_TRUE(r.empty());}
+TEST(PlayerBotCoordinationTest,CriticalMemberCreatesRetreatIntent){auto o=coordinationObservation();o.members[0].healthPercent=10;auto d=BotCoordination::evaluate(coordinationPolicy(),o);EXPECT_EQ(BotCoordinationState::Retreating,d.state);EXPECT_TRUE(std::ranges::all_of(d.intents,[](const auto&i){return i.type==BotCoordinationIntentType::Retreat;}));}
+TEST(PlayerBotCoordinationTest,LocalValidationRemainsRequired){EXPECT_TRUE(BotCoordination::evaluate(coordinationPolicy(),coordinationObservation()).localTargetValidationRequired);}
+TEST(PlayerBotCoordinationTest,InvalidGroupFailsWithoutAction){auto p=coordinationPolicy();p.id=0;auto d=BotCoordination::evaluate(p,coordinationObservation());EXPECT_EQ(BotCoordinationState::Failed,d.state);EXPECT_FALSE(d.directGameplayAction);}
