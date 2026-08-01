@@ -37,7 +37,14 @@ BotSurvivalAssessment BotController::evaluateSurvival(const BotSurvivalPolicy &p
 	if (observed->first.dead) { (void)observeDeath(); return { .urgency = BotSurvivalUrgency::Fatal, .decision = BotSurvivalDecision::Dead }; }
 	if (survivalProgress.state == BotSurvivalState::Failed || survivalProgress.state == BotSurvivalState::Recovering || survivalProgress.state == BotSurvivalState::Safe || survivalProgress.state == BotSurvivalState::Exhausted) survivalProgress = {};
 	const auto base = BotPerception::observe(controlled); const auto flee = base ? BotSurvival::selectFlee(*base, observed->second, policy) : BotFleeResult {};
-	return BotSurvival::assess(observed->first, policy, std::move(options), flee.outcome == BotFleeOutcome::SafePositionSelected);
+	auto assessment = BotSurvival::assess(observed->first, policy, std::move(options), flee.outcome == BotFleeOutcome::SafePositionSelected);
+	if (assessment.urgency == BotSurvivalUrgency::Critical || assessment.urgency == BotSurvivalUrgency::Fatal) {
+		survivalLootBlocked = true;
+		(void)BotLootTransfer::requestSurvivalInterrupt(lootProgress, assessment.decision, assessment.decision == BotSurvivalDecision::Dead);
+	} else if (assessment.urgency == BotSurvivalUrgency::None || assessment.urgency == BotSurvivalUrgency::Low) {
+		survivalLootBlocked = false;
+	}
+	return assessment;
 }
 
 BotHealingResult BotController::executeHealing(const BotHealingOption &option, std::chrono::milliseconds now, const BotSurvivalPolicy &policy) {
@@ -48,6 +55,18 @@ BotHealingResult BotController::executeHealing(const BotHealingOption &option, s
 	if (survivalProgress.state == BotSurvivalState::Failed) { result.outcome = BotHealingOutcome::RetryExhausted; return result; }
 	if (survivalProgress.state == BotSurvivalState::Cancelled) { result.outcome = BotHealingOutcome::Cancelled; return result; }
 	if (survivalProgress.state == BotSurvivalState::Fleeing || survivalProgress.state == BotSurvivalState::FleePlanning) { result.outcome = BotHealingOutcome::WorldRejected; return result; }
+	if (lootProgress.priority == BotLootPriorityState::WaitingForAuthoritativeBoundary) {
+		const auto corpse = lootProgress.request ? corpseAt(lootProgress.request->corpsePosition) : nullptr;
+		const auto sourceAfter = lootProgress.request ? corpseItemCount(corpse ? corpse->getContainer() : nullptr, lootProgress.request->itemTypeId) : 0;
+		const auto destinationAfter = lootProgress.request ? carriedCount(game, controlled, lootProgress.request->itemTypeId) : 0;
+		const auto sourceDelta = lootProgress.sourceBefore > sourceAfter ? lootProgress.sourceBefore - sourceAfter : 0;
+		const auto destinationDelta = destinationAfter > lootProgress.destinationBefore ? destinationAfter - lootProgress.destinationBefore : 0;
+		lootProgress.authoritativeBoundaryMovedCount = std::min(sourceDelta, destinationDelta);
+		lootProgress.authoritativeBoundaryOutcome = lootProgress.authoritativeBoundaryMovedCount == 0 ? BotLootTransferOutcome::NoEffect : lootProgress.authoritativeBoundaryMovedCount < lootProgress.request->count ? BotLootTransferOutcome::Partial : BotLootTransferOutcome::Succeeded;
+		lootProgress.state = BotLootExecutionState::Cancelled;
+		lootProgress.request.reset();
+		lootProgress.priority = BotLootPriorityState::HealingPriority;
+	}
 	if (survivalProgress.healing) {
 		result.request = *survivalProgress.healing; result.attempts = survivalProgress.attempts;
 		result.observedHealthDelta = observed->first.health - result.request.preHealth; result.observedManaDelta = static_cast<int32_t>(observed->first.mana) - static_cast<int32_t>(result.request.preMana); result.removedConditions = result.request.preConditions & ~observed->first.harmfulConditions;
@@ -90,6 +109,18 @@ BotFleeResult BotController::executeFlee(std::chrono::milliseconds now, const Bo
 	if (survivalProgress.state == BotSurvivalState::Failed) return { .outcome = BotFleeOutcome::RetryExhausted };
 	if (survivalProgress.state == BotSurvivalState::Cancelled) return { .outcome = BotFleeOutcome::Cancelled };
 	if (survivalProgress.healing) return { .outcome = BotFleeOutcome::Blocked };
+	if (lootProgress.priority == BotLootPriorityState::WaitingForAuthoritativeBoundary) {
+		const auto corpse = lootProgress.request ? corpseAt(lootProgress.request->corpsePosition) : nullptr;
+		const auto sourceAfter = lootProgress.request ? corpseItemCount(corpse ? corpse->getContainer() : nullptr, lootProgress.request->itemTypeId) : 0;
+		const auto destinationAfter = lootProgress.request ? carriedCount(game, controlled, lootProgress.request->itemTypeId) : 0;
+		const auto sourceDelta = lootProgress.sourceBefore > sourceAfter ? lootProgress.sourceBefore - sourceAfter : 0;
+		const auto destinationDelta = destinationAfter > lootProgress.destinationBefore ? destinationAfter - lootProgress.destinationBefore : 0;
+		lootProgress.authoritativeBoundaryMovedCount = std::min(sourceDelta, destinationDelta);
+		lootProgress.authoritativeBoundaryOutcome = lootProgress.authoritativeBoundaryMovedCount == 0 ? BotLootTransferOutcome::NoEffect : lootProgress.authoritativeBoundaryMovedCount < lootProgress.request->count ? BotLootTransferOutcome::Partial : BotLootTransferOutcome::Succeeded;
+		lootProgress.state = BotLootExecutionState::Cancelled;
+		lootProgress.request.reset();
+		lootProgress.priority = BotLootPriorityState::FleePriority;
+	}
 	if (survivalProgress.state == BotSurvivalState::Fleeing) { if (now - survivalProgress.startedAt >= policy.timeout) { (void)cancelRoute(); survivalProgress.state=BotSurvivalState::Failed; return { .outcome=BotFleeOutcome::TimedOut,.request=*survivalProgress.flee,.attempts=survivalProgress.attempts,.noProgress=survivalProgress.noProgress }; } auto progress = advanceRoute(now); const bool active = progress.state == BotRouteState::Ready || progress.state == BotRouteState::StepPending || progress.state == BotRouteState::ReplanRequired || progress.state == BotRouteState::Backoff; BotFleeResult r { .outcome = progress.state == BotRouteState::Arrived ? BotFleeOutcome::Safe : active ? BotFleeOutcome::Progressing : progress.reason == BotRouteReason::NoProgress ? BotFleeOutcome::NoProgress : BotFleeOutcome::Blocked, .request = *survivalProgress.flee, .attempts = survivalProgress.attempts, .noProgress = static_cast<uint8_t>(progress.consecutiveNoProgress) }; if (r.outcome == BotFleeOutcome::Safe) { const bool nearby=std::ranges::any_of(observed->second.creatures,[&](const auto &c){ return c.kind==BotCombatCreatureKind::Monster && c.visibility==BotCombatVisibility::Visible && !c.deadOrRemoved && std::max(Position::getDistanceX(controlled->getPosition(),c.position),Position::getDistanceY(controlled->getPosition(),c.position))<=2; }); if (nearby) { r.outcome=BotFleeOutcome::ThreatStillPresent; survivalProgress.state=BotSurvivalState::Failed; } else survivalProgress = { .state = BotSurvivalState::Safe }; } return r; }
 	survivalProgress.state = BotSurvivalState::FleeRequired;
 	const auto base = BotPerception::observe(controlled); if (!base) return { .outcome = BotFleeOutcome::Cancelled }; survivalProgress.state = BotSurvivalState::FleePlanning; auto result = BotSurvival::selectFlee(*base, observed->second, policy); if (result.outcome != BotFleeOutcome::SafePositionSelected) { survivalProgress.state = BotSurvivalState::Failed; return result; }
@@ -100,7 +131,7 @@ BotDeathResult BotController::observeDeath() {
 	BotDeathResult result; const auto controlled = player.lock(); if (!controlled) { result.state = BotSurvivalState::Dead; return result; }
 	result.observation = { 0, controlled->getPosition(), controlled->getHealth(), controlled->isRemoved() || controlled->getHealth() <= 0 };
 	if (!result.observation.authoritativeDead) { result.state = survivalProgress.state; return result; }
-	survivalProgress.state = BotSurvivalState::DeathDetected; cancelCombat(); result.combatCancelled = true; (void)cancelRoute(); (void)cancelTransition(); (void)cancelLoot(); adventureProgress = BotAdventure::advance(adventureProgress, { .revision=std::max<uint64_t>(adventureProgress.lastObservationRevision+1,1),.position=controlled->getPosition(),.dead=true }, std::chrono::milliseconds(0)); result.movementCancelled = true; survivalProgress = { .state = BotSurvivalState::Dead, .death = result.observation }; result.state = BotSurvivalState::Dead; return result;
+	survivalProgress.state = BotSurvivalState::DeathDetected; cancelCombat(); result.combatCancelled = true; (void)cancelRoute(); (void)cancelTransition(); (void)BotLootTransfer::requestSurvivalInterrupt(lootProgress, BotSurvivalDecision::Dead, true); adventureProgress = BotAdventure::advance(adventureProgress, { .revision=std::max<uint64_t>(adventureProgress.lastObservationRevision+1,1),.position=controlled->getPosition(),.dead=true }, std::chrono::milliseconds(0)); result.movementCancelled = true; survivalProgress = { .state = BotSurvivalState::Dead, .death = result.observation }; result.state = BotSurvivalState::Dead; return result;
 }
 
 void BotController::cancelSurvival() { if (survivalProgress.state != BotSurvivalState::Dead) survivalProgress = { .state = BotSurvivalState::Cancelled }; }
@@ -109,13 +140,20 @@ BotLootSelectionResult BotController::evaluateLoot(const Position &position, uin
 	const auto controlled = player.lock();
 	const auto observation = BotPerception::observe(controlled);
 	if (!observation) return { .eligibility = BotLootEligibility::InvalidLifecycle, .failure = BotLootFailure::InvalidLifecycle };
-	return BotLoot::observe(controlled, *observation, position, sourceCreatureId, expectedSignature, policy);
+	auto result = BotLoot::observe(controlled, *observation, position, sourceCreatureId, expectedSignature, policy);
+	if (!survivalLootBlocked && (lootProgress.freshCorpseRequired || lootProgress.freshInventoryRequired)) {
+		const auto inventory = BotLootTransfer::observeInventory(controlled);
+		const bool eligible = result.eligibility == BotLootEligibility::Eligible;
+		(void)BotLootTransfer::observeFresh(lootProgress, result.corpse.observationRevision, inventory.revision, eligible);
+	}
+	return result;
 }
 
 BotLootTransferResult BotController::executeLoot(const BotLootTransferRequest &request, std::chrono::milliseconds now, const BotLootPolicy &lootPolicy, const BotLootTransferPolicy &policy) {
 	BotLootTransferResult result { .request = request };
 	const auto controlled = player.lock();
 	if (!controlled || controlled->isRemoved() || controlled->getHealth() <= 0) { result.failure=BotLootTransferFailure::InvalidLifecycle;result.state=BotLootExecutionState::Failed;return result; }
+	if (survivalLootBlocked || !BotLootTransfer::mayDispatch(lootProgress)) { result.outcome=BotLootTransferOutcome::Cancelled;result.failure=BotLootTransferFailure::Cancelled;result.state=lootProgress.state;return result; }
 	if (lootProgress.state == BotLootExecutionState::Cancelled) { result.outcome=BotLootTransferOutcome::Cancelled;result.failure=BotLootTransferFailure::Cancelled;result.state=lootProgress.state;return result; }
 	if (lootProgress.state == BotLootExecutionState::Completed) { result.outcome=BotLootTransferOutcome::Succeeded;result.state=lootProgress.state;result.attempts=lootProgress.attempts;return result; }
 	if (lootProgress.state == BotLootExecutionState::Failed && lootProgress.request && *lootProgress.request==request) { result.outcome=BotLootTransferOutcome::RetryExhausted;result.failure=BotLootTransferFailure::RetryExhausted;result.state=lootProgress.state;result.attempts=lootProgress.attempts;return result; }
@@ -140,7 +178,7 @@ BotLootTransferResult BotController::executeLoot(const BotLootTransferRequest &r
 	const auto inventory=BotLootTransfer::observeInventory(controlled,policy.maxInventoryContainers,policy.maxInventoryDepth);if(request.destinationSignature&&request.destinationSignature!=inventory.signature){lootProgress={.state=BotLootExecutionState::Failed};result.state=lootProgress.state;result.outcome=BotLootTransferOutcome::StaleDestination;result.failure=BotLootTransferFailure::StaleDestination;return result;}
 	if (std::max(Position::getDistanceX(controlled->getPosition(),request.corpsePosition),Position::getDistanceY(controlled->getPosition(),request.corpsePosition))>1) { lootProgress={.state=BotLootExecutionState::ApproachingCorpse,.request=request,.attempts=1,.startedAt=now};(void)startRoute(request.corpsePosition,now,{.maxExpandedNodes=128,.maxRouteLength=lootPolicy.maxDistance,.maxPlanningOperations=2048});result.state=lootProgress.state;result.outcome=BotLootTransferOutcome::Pending;return result; }
 	const auto corpse=corpseAt(request.corpsePosition);if(!corpse||!corpse->getContainer()){result.outcome=BotLootTransferOutcome::CorpseExpired;result.failure=BotLootTransferFailure::CorpseExpired;result.state=BotLootExecutionState::Failed;return result;}
-	lootProgress={.state=BotLootExecutionState::OpeningCorpse,.request=request,.attempts=1,.startedAt=now};
+	lootProgress={.state=BotLootExecutionState::OpeningCorpse,.request=request,.attempts=1,.startedAt=now,.priority=BotLootPriorityState::LootActive,.corpseObservationRevision=eligibility.corpse.observationRevision,.inventoryObservationRevision=inventory.revision};
 	const bool alreadyOpen=controlled->getContainerID(corpse->getContainer())>=0;
 	if(!alreadyOpen&&!g_actions().useItem(controlled,request.corpsePosition,0,corpse,false)){lootProgress.state=BotLootExecutionState::Failed;result.outcome=BotLootTransferOutcome::WorldRejected;result.failure=BotLootTransferFailure::WorldRejected;result.state=lootProgress.state;return result;}
 	result.ordinaryOpenAccepted=true;

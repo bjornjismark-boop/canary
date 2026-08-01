@@ -156,7 +156,7 @@ BotLootSelectionResult BotLoot::observe(const std::shared_ptr<Player> &player, c
 		return result;
 	}
 	const auto container = corpse->getContainer();
-	result.corpse.observationRevision = world.topologyRevision;
+	result.corpse.observationRevision = static_cast<uint64_t>(OTSYS_TIME());
 	result.corpse.position = position;
 	result.corpse.corpseItemTypeId = corpse->getID();
 	result.corpse.sourceCreatureId = sourceCreatureId;
@@ -254,4 +254,49 @@ bool BotLootTransfer::legalTransition(BotLootExecutionState from, BotLootExecuti
 		case BotLootExecutionState::RetryBackoff: return to == BotLootExecutionState::OpeningCorpse || to == BotLootExecutionState::Failed;
 		default: return false;
 	}
+}
+
+BotLootPriorityState BotLootTransfer::requestSurvivalInterrupt(BotLootExecutionProgress &progress, BotSurvivalDecision decision, bool dead) {
+	if (dead) {
+		progress = { .state = BotLootExecutionState::Cancelled, .priority = BotLootPriorityState::DeathOverride, .freshCorpseRequired = true, .freshInventoryRequired = true };
+		return progress.priority;
+	}
+	if (decision != BotSurvivalDecision::Heal && decision != BotSurvivalDecision::Flee) {
+		return progress.priority;
+	}
+	progress.freshCorpseRequired = true;
+	progress.freshInventoryRequired = true;
+	if (progress.state == BotLootExecutionState::TransferPending || progress.state == BotLootExecutionState::VerifyingTransfer) {
+		progress.priority = BotLootPriorityState::WaitingForAuthoritativeBoundary;
+	} else {
+		progress.state = BotLootExecutionState::Cancelled;
+		progress.request.reset();
+		progress.priority = decision == BotSurvivalDecision::Heal ? BotLootPriorityState::HealingPriority : BotLootPriorityState::FleePriority;
+	}
+	return progress.priority;
+}
+
+bool BotLootTransfer::mayDispatch(const BotLootExecutionProgress &progress) {
+	return progress.priority == BotLootPriorityState::LootActive || progress.priority == BotLootPriorityState::LootResumeAllowed;
+}
+
+bool BotLootTransfer::observeFresh(BotLootExecutionProgress &progress, uint64_t corpseRevision, uint64_t inventoryRevision, bool corpseEligible) {
+	if (!corpseEligible) {
+		progress = { .state = BotLootExecutionState::Cancelled, .priority = BotLootPriorityState::LootAbandoned };
+		return false;
+	}
+	if (!progress.freshCorpseRequired && !progress.freshInventoryRequired) {
+		return BotLootTransfer::mayDispatch(progress);
+	}
+	if (corpseRevision == 0 || inventoryRevision == 0 || corpseRevision == progress.corpseObservationRevision || inventoryRevision == progress.inventoryObservationRevision) {
+		progress.priority = BotLootPriorityState::FreshObservationRequired;
+		return false;
+	}
+	progress.corpseObservationRevision = corpseRevision;
+	progress.inventoryObservationRevision = inventoryRevision;
+	progress.freshCorpseRequired = false;
+	progress.freshInventoryRequired = false;
+	progress.priority = BotLootPriorityState::LootResumeAllowed;
+	progress.state = BotLootExecutionState::Idle;
+	return true;
 }

@@ -7,6 +7,7 @@
 #pragma once
 
 #include "creatures/players/bots/bot_navigation.hpp"
+#include "creatures/players/bots/bot_survival.hpp"
 
 class Item;
 class Player;
@@ -92,6 +93,7 @@ public:
 };
 
 enum class BotLootExecutionState : uint8_t { Idle, ApproachingCorpse, OpeningCorpse, ObservingContents, SelectingItem, TransferPending, VerifyingTransfer, CorpseEmpty, CapacityBlocked, Completed, RetryBackoff, Failed, Cancelled };
+enum class BotLootPriorityState : uint8_t { LootActive, SurvivalInterruptRequested, WaitingForAuthoritativeBoundary, LootSuspended, HealingPriority, FleePriority, DeathOverride, FreshObservationRequired, LootResumeAllowed, LootAbandoned };
 enum class BotLootTransferOutcome : uint8_t { Succeeded, Partial, Pending, NoEffect, CorpseOpened, AlreadyOpen, CapacityInsufficient, DestinationFull, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryScheduled, RetryExhausted, Cancelled };
 enum class BotLootTransferFailure : uint8_t { None, InvalidLifecycle, CapacityInsufficient, DestinationFull, NoLootRights, StaleCorpse, StaleItem, StaleDestination, ItemGone, CorpseExpired, WorldRejected, TimedOut, RetryExhausted, Cancelled };
 
@@ -175,6 +177,13 @@ struct BotLootExecutionProgress {
 	std::chrono::milliseconds startedAt { 0 };
 	std::chrono::milliseconds nextAttemptAt { 0 };
 	bool containsWorldOwnership = false;
+	BotLootPriorityState priority = BotLootPriorityState::LootActive;
+	uint64_t corpseObservationRevision = 0;
+	uint64_t inventoryObservationRevision = 0;
+	bool freshCorpseRequired = false;
+	bool freshInventoryRequired = false;
+	BotLootTransferOutcome authoritativeBoundaryOutcome = BotLootTransferOutcome::Pending;
+	uint32_t authoritativeBoundaryMovedCount = 0;
 };
 
 class BotLootTransfer final {
@@ -183,4 +192,7 @@ public:
 	static BotCapacityAssessment assessCapacity(uint32_t freeCapacity, uint32_t unitWeight, uint32_t requestedCount);
 	static std::chrono::milliseconds retryDelay(uint8_t attempt, const BotLootTransferPolicy &policy);
 	static bool legalTransition(BotLootExecutionState from, BotLootExecutionState to);
+	static BotLootPriorityState requestSurvivalInterrupt(BotLootExecutionProgress &, BotSurvivalDecision, bool dead = false);
+	static bool mayDispatch(const BotLootExecutionProgress &);
+	static bool observeFresh(BotLootExecutionProgress &, uint64_t corpseRevision, uint64_t inventoryRevision, bool corpseEligible);
 };

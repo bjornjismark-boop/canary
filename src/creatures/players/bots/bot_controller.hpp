@@ -88,5 +88,6 @@ private:
 	BotAttackExecutionState attackExecution;
 	BotSurvivalProgress survivalProgress;
 	BotLootExecutionProgress lootProgress;
+	bool survivalLootBlocked = false;
 	BotAdventureProgress adventureProgress;
 };
