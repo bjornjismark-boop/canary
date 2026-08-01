@@ -486,7 +486,7 @@ explicit utanför scope.
 
 ---
 
-## [ ] M8 — Long-Horizon Progression Planner
+## [x] M8 — Long-Horizon Progression Planner
 
 M8A etablerar value-only kontrakt för deterministiskt goal selection, bounded
 hierarkiska planer, verifierade checkpoints och finite replanning. Prioritetsordningen
@@ -522,6 +522,17 @@ M8C är komplett men full M8 förblir öppen: roadmapens hunting-area suitabilit
 skill target, faktisk configured target-level attainment, unsuitable-area switching
 och migration mellan planner-versioner saknar fortfarande full evidens.
 
+M8D sluter de fem återstående kriterierna med value-only level-/skill-targets,
+auktoritativa progressionobservationer, bounded empiriska hunting-area-fönster,
+deterministisk suitability och finit area-switching med action-boundary, cooldown och
+exhaustion. Planner-checkpointversion 2 migrerar explicit version 1, cappar räknare,
+bevarar player identity och kräver färsk observation. En databas/world-fixture startar
+nära nästa level, väljer ett verkligt synligt monster genom M3, låter vanlig
+combat/death ge XP och level, persisterar via vanlig save/logout och verifierar att
+ny login ser target som terminalt. En separat fixture observerar normal skill advance
+och laddar/migrerar en verklig version-1-rad. Komplett gate: build 0, unit 547/547,
+databasbackad integration 99/99, diff 0. Source commit `92def555d`.
+
 ### Mål
 
 Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment, access och quests.
@@ -530,10 +541,10 @@ Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment
 
 - [x] progression goals
 - [x] goal prerequisites
-- [ ] hunting-area suitability
+- [x] hunting-area suitability
 - [x] equipment target
 - [x] quest/access target
-- [ ] skill target
+- [x] skill target
 - [x] economy target
 - [x] risk- och failure history
 - [x] persistent planner state
@@ -542,11 +553,11 @@ Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment
 
 ### Acceptance
 
-- [ ] låg-level-bot når konfigurerat mål-level;
-- [ ] bot byter huntingområde när det gamla blir olämpligt;
-- [ ] bot kan prioritera en access quest före nästa jaktområde;
-- [ ] misslyckade mål blacklistas tillfälligt;
-- [ ] persistent plan kan migreras mellan planner-versioner.
+- [x] låg-level-bot når konfigurerat mål-level;
+- [x] bot byter huntingområde när det gamla blir olämpligt;
+- [x] bot kan prioritera en access quest före nästa jaktområde;
+- [x] misslyckade mål blacklistas tillfälligt;
+- [x] persistent plan kan migreras mellan planner-versioner.
 
 ---
 
