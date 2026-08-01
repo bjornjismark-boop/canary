@@ -233,13 +233,13 @@ Hantera corpse, loot, nästlade containers, capacity och grundläggande supplies
 
 - [x] corpse detection
 - [x] corpse ownership/access
-- [ ] open container
+- [x] open container
 - [ ] nested `containerPath`
 - [x] item-ID-baserade lootregler
 - [x] stack count
-- [ ] destination backpack
-- [ ] capacity
-- [ ] full container
+- [x] destination backpack
+- [x] capacity
+- [x] full container
 - [ ] skydd för quest-items
 - [ ] okända items bevaras
 - [ ] supply counters
@@ -251,12 +251,18 @@ deterministiska item-ID-regler utan att öppna corpset eller flytta items. M4B
 återstår för authoritative open/transfer, destination containers och full/capacity
 handling; M4C återstår för supply counters och depletion decisions.
 
+M4B-evidens: eligible corpses öppnas genom ordinary `Actions::useItem`, och
+valda items skickas genom ordinary `Game::playerMoveItem`. Source/destination
+deltas verifieras före success; stack merge/partial, capacity, full destination,
+stale signatures, decay, en pending action och teardown normaliseras med
+value-only state. Nested `containerPath` och supply decisions återstår.
+
 ### Acceptance
 
-- [ ] corpse öppnas genom normal serveraction;
-- [ ] konfigurerat loot flyttas till rätt container;
-- [ ] otillräcklig capacity hanteras utan loop;
-- [ ] protected och unknown items säljs eller kastas inte;
+- [x] corpse öppnas genom normal serveraction;
+- [x] konfigurerat loot flyttas till rätt container;
+- [x] otillräcklig capacity hanteras utan loop;
+- [x] protected och unknown items säljs eller kastas inte;
 - [ ] supply- och capacity-trösklar kan stoppa jakten.
 
 ---
