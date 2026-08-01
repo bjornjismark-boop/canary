@@ -488,23 +488,34 @@ explicit utanför scope.
 
 ## [ ] M8 — Long-Horizon Progression Planner
 
+M8A etablerar value-only kontrakt för deterministiskt goal selection, bounded
+hierarkiska planer, verifierade checkpoints och finite replanning. Prioritetsordningen
+death/recovery, survival, resupply, aktiv quest, equipment/progression, economy och
+idle är explicit. Planer komponerar endast M2–M7-intents och muterar inget gameplay
+direkt. Databas/world-fixtures bevisar M2 travel, M3 combat, M4 loot, M6 supply,
+M7 dialogue/quest, survival override, deterministic resupply/quest/route replanning
+samt safe checkpoint reconstruction efter ny session. Gate: build 0, unit 449/449,
+databasbackad integration 93/93, diff 0. Source commit `8aac12c07`.
+Production-scale long-duration planning, adaptive learning, dynamic area discovery,
+generalized quest discovery, multi-bot coordination och M8B är fortsatt öppna.
+
 ### Mål
 
 Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment, access och quests.
 
 ### Leverabler
 
-- [ ] progression goals
-- [ ] goal prerequisites
+- [x] progression goals
+- [x] goal prerequisites
 - [ ] hunting-area suitability
-- [ ] equipment target
-- [ ] quest/access target
+- [x] equipment target
+- [x] quest/access target
 - [ ] skill target
-- [ ] economy target
-- [ ] risk- och failure history
+- [x] economy target
+- [x] risk- och failure history
 - [ ] persistent planner state
-- [ ] resume efter restart
-- [ ] deterministisk baselineplanner
+- [x] resume efter restart
+- [x] deterministisk baselineplanner
 
 ### Acceptance
 
