@@ -364,6 +364,12 @@ size_t BotManager::coordinationReservationCount(BotCoordinationGroupId groupId) 
 	return group == coordinationGroups.end() ? 0 : group->second.reservations.size();
 }
 
+size_t BotManager::coordinationReservationCount() const {
+	size_t count = 0;
+	for (const auto &[groupId, group] : coordinationGroups) count += group.reservations.size();
+	return count;
+}
+
 void BotManager::clearCoordination() {
 	coordinationGroups.clear();
 }

@@ -15,6 +15,8 @@
 class Logger;
 class BotManager;
 class BotFleetAdministration;
+class BotFleetTelemetry;
+class BotFleetAdminService;
 
 class FailedToInitializeCanary : public std::exception {
 private:
@@ -55,6 +57,8 @@ private:
 	ServiceManager &serviceManager;
 	std::unique_ptr<BotManager> botManager;
 	std::unique_ptr<BotFleetAdministration> botAdministration;
+	std::unique_ptr<BotFleetTelemetry> botTelemetry;
+	std::unique_ptr<BotFleetAdminService> botAdminService;
 
 	LoaderStatus loaderStatus = LoaderStatus::LOADING;
 	std::mutex loaderMutex;

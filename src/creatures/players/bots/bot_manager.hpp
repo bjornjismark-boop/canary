@@ -79,6 +79,7 @@ public:
 	[[nodiscard]] BotRouteProgress executeCoordinationMovement(const std::string &, const BotCoordinationIntent &, std::chrono::milliseconds now, BotRouteLimits limits = {});
 	[[nodiscard]] size_t coordinationGroupCount() const { return coordinationGroups.size(); }
 	[[nodiscard]] size_t coordinationReservationCount(BotCoordinationGroupId) const;
+	[[nodiscard]] size_t coordinationReservationCount() const;
 	void clearCoordination();
 	[[nodiscard]] BotFleetFailure configureFleet(BotFleetPopulationPolicy, BotFleetDistributionPolicy, std::vector<BotFleetMemberProfile>, uint32_t intervalTicks = 1000);
 	[[nodiscard]] BotFleetReconciliation reconcileFleet(uint64_t now, bool overloaded = false);

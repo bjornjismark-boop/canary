@@ -17,6 +17,7 @@
 #include "creatures/players/bots/bot_coordination.hpp"
 #include "creatures/players/bots/bot_fleet.hpp"
 #include "creatures/players/bots/bot_fleet_configuration.hpp"
+#include "creatures/players/bots/bot_fleet_telemetry.hpp"
 #include "creatures/players/grouping/party.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
@@ -319,6 +320,14 @@ TEST(PlayerBotIntegrationTest, FleetConfigurationCommandsAreAtomicAuditedAndAuth
 	(void)admin.submit({.type=BotFleetCommandType::Pause,.operatorId=7,.expectedRevision=1},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_TRUE(manager.fleetState().paused);(void)admin.submit({.type=BotFleetCommandType::Resume,.operatorId=7,.expectedRevision=1},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_FALSE(manager.fleetState().paused);
 	(void)admin.submit({.type=BotFleetCommandType::SetDesired,.operatorId=7,.expectedRevision=1,.value=1},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);ASSERT_EQ(2,admin.activeRevision()->revision);(void)admin.submit({.type=BotFleetCommandType::Reload,.operatorId=7,.expectedRevision=2},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_EQ(3,admin.activeRevision()->revision);
 	(void)admin.submit({.type=BotFleetCommandType::LogoutMember,.operatorId=7,.expectedRevision=3,.memberName=fixture.name},true);EXPECT_EQ(BotFleetCommandState::Completed,admin.process(manager).front().state);EXPECT_EQ(0,manager.size());EXPECT_FALSE(admin.audit().empty());admin.stop();ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, FleetAdminTelemetryObservesOrdinarySessionAndQueuesSafeLogout) {
+	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());BotFleetPopulationPolicy population{.desiredOnline=0,.minimumOnline=0,.maximumOnline=1,.absoluteHardMaximum=1,.revision=1};ASSERT_EQ(BotFleetFailure::None,manager.configureFleet(population,{},{{.id=fixture.playerId,.name=fixture.name}}));const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);
+	BotFleetAdministration admin;BotFleetTelemetry telemetry;BotFleetAdminServicePolicy policy{.transport=BotFleetAdminTransport::UnixSocket};BotFleetAdminService service(admin,telemetry,policy,[](uint64_t id,std::string_view credential){return id==42&&credential=="fixture";});
+	auto status=service.handle(manager,{.operatorId=42,.encodedSize=16,.credential="fixture"});ASSERT_TRUE(status.success());ASSERT_TRUE(status.snapshot);EXPECT_EQ(1,status.snapshot->managedSessions);EXPECT_EQ(1,status.snapshot->plannerHealthy);
+	auto command=service.handle(manager,{.operation=BotFleetAdminOperation::Command,.operatorId=42,.window=1,.encodedSize=32,.credential="fixture",.command={.type=BotFleetCommandType::LogoutMember,.memberName=fixture.name}});ASSERT_EQ(BotFleetCommandState::Accepted,command.command.state);EXPECT_EQ(1,admin.queued());const auto completed=admin.process(manager);ASSERT_EQ(1,completed.size());EXPECT_EQ(BotFleetCommandState::Completed,completed.front().state);EXPECT_EQ(nullptr,session->getPlayer());
+	service.stop();telemetry.stop();admin.stop();ASSERT_TRUE(fixture.cleanup());EXPECT_FALSE(fixture.hasCommittedRows());
 }
 
 TEST(PlayerBotIntegrationTest, MultiBotCoordinationObservesPartyAndDelegatesFormationToM2) {

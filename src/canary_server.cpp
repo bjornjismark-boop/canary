@@ -39,6 +39,7 @@
 #include "creatures/players/components/weapon_proficiency.hpp"
 #include "creatures/players/bots/bot_manager.hpp"
 #include "creatures/players/bots/bot_fleet_configuration.hpp"
+#include "creatures/players/bots/bot_fleet_telemetry.hpp"
 #include "creatures/players/vocations/vocation.hpp"
 #include "utils/benchmark.hpp"
 
@@ -245,6 +246,10 @@ int CanaryServer::run() {
 				botManager = std::make_unique<BotManager>(g_game());
 				const std::string fleetConfigurationPath = "config/playerbots.json";
 				botAdministration = std::make_unique<BotFleetAdministration>([fleetConfigurationPath] { return BotFleetConfiguration::load(fleetConfigurationPath); });
+				botTelemetry = std::make_unique<BotFleetTelemetry>();
+				// No administrative transport is opened by default. A future server-internal
+				// adapter must explicitly select localhost or a Unix socket and provide authentication.
+				botAdminService = std::make_unique<BotFleetAdminService>(*botAdministration, *botTelemetry);
 				if (std::filesystem::exists(fleetConfigurationPath)) {
 					const auto fleetConfiguration = BotFleetConfiguration::load(fleetConfigurationPath);
 					if (!fleetConfiguration.success() || botAdministration->install(*botManager, fleetConfiguration.revision) != BotFleetConfigurationFailure::None) {
@@ -641,6 +646,10 @@ void CanaryServer::modulesLoadHelper(bool loaded, std::string_view identifier) {
 
 void CanaryServer::shutdown() {
 	if (botManager) {
+		if (botAdminService) botAdminService->stop();
+		botAdminService.reset();
+		if (botTelemetry) botTelemetry->stop();
+		botTelemetry.reset();
 		if (botAdministration) botAdministration->stop();
 		botAdministration.reset();
 		botManager->stopFleet(true);
