@@ -239,7 +239,7 @@ Hantera corpse, loot, nästlade containers, capacity och grundläggande supplies
 - [x] stack count
 - [x] destination backpack
 - [x] capacity
-- [x] full container
+- [ ] full container
 - [ ] skydd för quest-items
 - [ ] okända items bevaras
 - [ ] supply counters
@@ -253,8 +253,8 @@ handling; M4C återstår för supply counters och depletion decisions.
 
 M4B-evidens: eligible corpses öppnas genom ordinary `Actions::useItem`, och
 valda items skickas genom ordinary `Game::playerMoveItem`. Source/destination
-deltas verifieras före success; stack merge/partial, capacity, full destination,
-stale signatures, decay, en pending action och teardown normaliseras med
+deltas verifieras före success; capacity preflight, stale signatures, decay,
+en pending action och teardown normaliseras med
 value-only state. Nested `containerPath` och supply decisions återstår.
 
 ### Acceptance
