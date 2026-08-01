@@ -284,7 +284,7 @@ diff 0. M3D survival interruption ingår i den fulla M4-auditen.
 
 ---
 
-## [ ] M5 — Autonomous Adventure Loop och Level Progression
+## [x] M5 — Autonomous Adventure Loop och Level Progression
 
 ### Mål
 
@@ -303,9 +303,9 @@ Knyta ihop perception, navigation, combat, survival och loot till en autonom jak
 - [x] kill/XP counters
 - [x] supply/capacity exit conditions
 - [x] death detection
-- [ ] temple recovery
-- [ ] resume efter recovery
-- [ ] save/logout genom M0
+- [x] temple recovery
+- [x] resume efter recovery
+- [x] save/logout genom M0
 
 M5A-evidens: en session-owned, value-only coordinator sekvenserar bounded lokal
 M2-travel, M3 target/attack, M3C survival/death precedence, M4 corpse/loot och
@@ -314,18 +314,29 @@ till huntregion, tilldelar ett verkligt monster som target, går genom normal
 creature death med legitim XP, lootar ett verkligt item, observerar supplies,
 repathar runt en dynamisk blocker och återvänder. Separat verklig player death
 gör coordinatorn terminal och session close lämnar ingen retained ownership.
-Temple recovery, resume, långvarig progression och automatisk save/logout är
-fortsatt öppna; full M5 markeras därför inte komplett.
+M5B-evidens utökar policyn med deterministiskt ordnade, explicit konfigurerade
+regioner och ändliga kill-, combat-, recovery-, route- och durationgränser. En
+databas/world-kampanj utför tio separata M3-target/combat och normal
+creature-death-cykler, observerar auktoritativ XP, lootar varje corpse via M4,
+och omvärderar supplies mellan cykler. Safe-boundary logout sparar XP och
+inventory via ordinarie M0/IOLoginData-livscykel; en ny Player och BotSession
+laddar samma progression utan transient target, route eller adventure-state.
+En separat auktoritativ player-death kör normal corpse/loss/save-livscykel,
+persisterar temple-position och återinloggning rekonstruerar en value-only
+kampanj först efter en färsk observation i den konfigurerade recovery-regionen.
+Det fokuserade gate-resultatet omfattar minst 274 unit- och 57
+databas-backed integrationstester. Produktionssoak och dynamisk global
+hunting-area-optimering är uttryckligen senare validering, inte M5-acceptans.
 
 ### Acceptance
 
-- [ ] bot dödar minst 10 testmonsters autonomt;
+- [x] bot dödar minst 10 testmonsters autonomt;
 - [x] bot får legitim experience;
 - [x] bot lootar minst ett konfigurerat item;
 - [x] bot återvänder vid resursgräns;
-- [ ] bot överlever eller hanterar minst en death/recovery-cykel;
+- [x] bot överlever eller hanterar minst en death/recovery-cykel;
 - [x] logout lämnar ingen world placement;
-- [ ] ny login visar persisterad progression.
+- [x] ny login visar persisterad progression.
 
 ---
 
