@@ -412,25 +412,25 @@ Skapa ett generellt, serverauktoritativt questflöde.
 ### Objective-typer
 
 - [x] prata med NPC
-- [ ] besök plats
-- [ ] döda creatures
-- [ ] samla items
+- [x] besök plats
+- [x] döda creatures
+- [x] samla items
 - [ ] använd item/world object
 - [ ] leverera items
 - [ ] besegra specifikt target
 - [ ] sekventiella objectives
-- [ ] prerequisites
+- [x] prerequisites
 - [ ] reward collection
 
 ### Leverabler
 
-- [ ] `QuestDefinition`
-- [ ] `QuestProgress`
+- [x] `QuestDefinition`
+- [x] `QuestProgress`
 - [ ] `BotQuestPlan`
 - [x] structured NPC adapter där möjligt
-- [ ] metadata/adapters för Lua-baserade quests
-- [ ] storage används som serverauktoritativ signal
-- [ ] botten skriver aldrig quest-storage direkt
+- [x] metadata/adapters för Lua-baserade quests
+- [x] storage används som serverauktoritativ signal
+- [x] botten skriver aldrig quest-storage direkt
 - [ ] retry och idempotens
 - [ ] restart/resume
 
@@ -446,6 +446,19 @@ timeout, range/removal-cancellation, rate bounds, M6B shop-regression och oför�
 quest storage. Komplett gate: build 0, unit 367/367, databasbackad integration
 79/79, diff 0. Source commit `442096a47`. Full M7 förblir öppen för quest-state,
 prerequisites, storage/reward verification, multi-NPC-flöden och travel execution.
+
+M7B-evidens: explicit konfigurerade, stable-ID-baserade quest- och missionkontrakt
+observerar endast den kontrollerade spelarens synliga missiontext, bounded storage-
+predikat, level, vocation, inventory, money, position och ordinarie händelseevidens.
+Mission state, prerequisites samt kill-, item-, location- och verifierat dialogue-
+progress normaliseras deterministiskt utan world- eller Lua-ägarskap. Reward checks
+kräver auktoritativa post-action-deltan för item, experience och mission/storage;
+PlayerBot-koden har ingen muterande storage- eller reward-väg. Real Player, NPC,
+Item, Monster, death, movement, dialogue och databas-fixtures bevisar observation,
+progress, reward verification, ordinary-player-regression och teardown. Komplett
+gate: build 0, unit 395/395, databasbackad integration 85/85, diff 0. Source commit
+`086c070d3`. Full M7 förblir öppen för bounded execution, use/delivery, sekventiella
+objectives, multi-NPC, retry och resume som ingår i M7C.
 
 ### Acceptance
 
