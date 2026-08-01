@@ -607,6 +607,21 @@ is 10/10 unit plus one database/world lifecycle test; the complete gate is build
 No HTTP, GUI, JavaScript or MyAAC code was added. Full M9 remains open for
 production soak and remaining release-hardening acceptance.
 
+M9E partial evidence (2026-08-01): value-only resource, pressure,
+load-shedding, deterministic soak, fault-result and release-readiness contracts
+now enforce conservative hard ceilings and ordinary-player-first precedence.
+Canary's supported dispatcher load category is consumed on the existing
+dispatcher-owned fleet reconciliation path; critical pressure blocks new bot
+logins, reduces optional work and recovers with hysteresis, while save/logout
+safety remains enabled. A standalone bounded deterministic soak executable
+requires an explicitly disposable test environment and emits an atomic terminal
+report labeled `PRODUCTION_SOAK=NO`. Current focused evidence is 22 unit and two
+database/world integration tests, including three reconstruction cycles and
+pressure recovery. Full M9 remains open: the roadmap-required long mixed
+human/bot production soak with actual stable session, memory and tick-latency
+evidence has not been executed, and the complete requested fault campaign is
+not yet proven.
+
 ### Mål
 
 Köra flera säkra bots tillsammans med vanliga spelare under längre tid.

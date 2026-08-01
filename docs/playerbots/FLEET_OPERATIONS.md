@@ -42,6 +42,24 @@ INTEGRATION_FILTER='PlayerBotIntegrationTest.FleetHardening*' \
   /home/playerbots/workspace/playerbots/tools/run-playerbots-gate.sh
 ```
 
+Build and run the standalone deterministic soak tool with an explicit disposable
+database environment and durable output path:
+
+```sh
+cmake --build build/linux-debug --target playerbots_soak
+build/linux-debug/tests/playerbots_soak \
+  --profile medium \
+  --environment /path/to/canary-test.env \
+  --output /path/to/playerbots-soak-report.txt
+```
+
+The tool refuses environments unless `TEST_DB_ALLOW_RESET=1` and the database
+name is visibly test-specific. `--ticks` may override the selected profile only
+within the absolute 10,000,000-tick ceiling. Output is written through a
+temporary file and renamed only after the terminal result is complete. The
+report labels deterministic execution and `PRODUCTION_SOAK=NO`; it must not be
+presented as a live-server soak.
+
 This command is bounded and uses the disposable test database configured by the
 gate. It is not a production soak. A production candidate must separately run a
 time-bounded mixed human/bot soak against an explicitly disposable environment,
