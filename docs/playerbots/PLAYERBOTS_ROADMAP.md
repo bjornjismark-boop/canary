@@ -499,6 +499,16 @@ databasbackad integration 93/93, diff 0. Source commit `8aac12c07`.
 Production-scale long-duration planning, adaptive learning, dynamic area discovery,
 generalized quest discovery, multi-bot coordination och M8B är fortsatt öppna.
 
+M8B lägger till ett value-only execution- och arbitrationlager ovanpå M8A. Exakt en
+plan och ett delegerat steg tillåts per execution; M2–M7 behåller ägarskapet för
+gameplay och checkpointen avancerar först efter observerad terminal success och
+verifierad postcondition. Death, survival, pending action-boundary, shutdown, quest,
+resupply och progression har deterministisk precedence. Retry, alternatives,
+recovery, ticks och failure memory är bounded. Gate: build 0, unit 481/481,
+databasbackad integration 95/95, diff 0. Source commit `1813e5e00`.
+Full M8 är fortsatt öppen för M8C:s durable persistence, reconstruction och bounded
+multi-session/long-duration acceptance.
+
 ### Mål
 
 Välja långsiktiga mål baserat på vocation, level, skills, ekonomi, equipment, access och quests.
