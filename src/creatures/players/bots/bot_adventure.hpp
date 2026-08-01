@@ -79,3 +79,46 @@ public:
 	static bool legalTransition(BotAdventureState, BotAdventureState);
 	static bool contains(const BotAdventureRegion &, const Position &);
 };
+
+enum class BotCampaignState : uint8_t { Idle, Running, Combat, Loot, Supply, DeathDetected, Recovering, Reconstructing, Resumed, SaveBoundary, LogoutReady, Completed, Failed, Cancelled };
+enum class BotCampaignFailure : uint8_t { None, UnknownRegion, NoReachableRegion, KillAttemptLimit, CombatFailureLimit, RecoveryLimit, DurationLimit, UnsafeSaveBoundary, StaleObservation, Cancelled };
+struct BotConfiguredRegion { std::string id; BotAdventureRegion area; uint16_t maximumTravelRange = 16; auto operator<=>(const BotConfiguredRegion &) const = default; };
+struct BotCampaignPolicy {
+	std::vector<BotConfiguredRegion> allowedRegions;
+	uint16_t targetKillCount = 10;
+	uint16_t maximumKillAttempts = 20;
+	uint8_t maximumCombatFailures = 3;
+	uint8_t maximumRecoveryAttempts = 2;
+	uint16_t maximumRouteLength = 32;
+	std::chrono::milliseconds maximumDuration { 300000 };
+	uint8_t minimumHealthPercent = 40;
+	uint32_t minimumHealingReserve = 1;
+};
+struct BotCampaignProgress {
+	BotCampaignState state = BotCampaignState::Idle;
+	BotCampaignFailure failure = BotCampaignFailure::None;
+	uint16_t authoritativeKills = 0;
+	uint16_t killAttempts = 0;
+	uint8_t combatFailures = 0;
+	uint8_t recoveryAttempts = 0;
+	uint64_t lastDeathEvidence = 0;
+	uint64_t lastObservationRevision = 0;
+	std::chrono::milliseconds startedAt { 0 };
+	std::string selectedRegionId;
+	bool freshObservationRequired = true;
+	bool containsWorldOwnership = false;
+	auto operator<=>(const BotCampaignProgress &) const = default;
+};
+
+class BotCampaign final {
+public:
+	static std::optional<BotConfiguredRegion> selectRegion(const BotCampaignPolicy &, const std::vector<std::string> &reachableRegionIds);
+	static BotCampaignProgress begin(const BotCampaignPolicy &, std::chrono::milliseconds now = {});
+	static BotCampaignProgress recordAttempt(BotCampaignProgress, const BotCampaignPolicy &, std::chrono::milliseconds now = {});
+	static BotCampaignProgress recordAuthoritativeKill(BotCampaignProgress, uint64_t deathEvidence, const BotCampaignPolicy &);
+	static BotCampaignProgress recordCombatFailure(BotCampaignProgress, const BotCampaignPolicy &);
+	static BotCampaignProgress recordDeath(BotCampaignProgress, uint64_t deathEvidence, const BotCampaignPolicy &);
+	static BotCampaignProgress reconstruct(BotCampaignProgress, uint64_t observationRevision, const Position &, const BotConfiguredRegion &, const BotCampaignPolicy &);
+	static bool safeSaveBoundary(bool combatActive, bool movementActive, bool lootActive, bool survivalActive);
+	static BotCampaignProgress cancel(BotCampaignProgress);
+};

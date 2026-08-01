@@ -1532,3 +1532,136 @@ TEST(PlayerBotIntegrationTest, BoundedAdventureCoordinatorComposesRealMovementCo
 TEST(PlayerBotIntegrationTest, AdventureDeathAndSessionCloseAreTerminalAndOwnershipSafe) {
 	PlayerBotDatabaseFixture fixture(g_database());createWalkableTile(fixture.start);BotManager manager(g_game());const auto session=loginBotOrReport(manager,fixture.name);ASSERT_NE(nullptr,session);auto player=std::const_pointer_cast<Player>(session->getPlayer());BotAdventureObservation active{.revision=1,.position=fixture.start};EXPECT_EQ(BotAdventureState::Preparing,manager.advanceAdventure(fixture.name,active,std::chrono::milliseconds(1)).state);CombatDamage damage;damage.primary={COMBAT_PHYSICALDAMAGE,-player->getHealth()};ASSERT_TRUE(g_game().combatChangeHealth(nullptr,player,damage));EXPECT_EQ(BotSurvivalState::Dead,manager.observeDeath(fixture.name).state);ASSERT_NE(nullptr,session->getAdventureProgress());EXPECT_EQ(BotAdventureState::Dead,session->getAdventureProgress()->state);EXPECT_FALSE(session->getAdventureProgress()->containsWorldOwnership);EXPECT_TRUE(manager.logout(fixture.name,false));EXPECT_EQ(nullptr,session->getAdventureProgress());ASSERT_TRUE(fixture.cleanup());
 }
+
+TEST(PlayerBotIntegrationTest, BoundedCampaignCompletesTenAuthoritativeCombatLootAndSupplyCycles) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position hunt(fixture.start.x + 1, fixture.start.y, fixture.start.z);
+	createWalkableTile(fixture.start);
+	createWalkableTile(hunt);
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	const auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	auto backpack = Item::CreateItem(ITEM_BACKPACK);
+	ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalAddItem(player, backpack, CONST_SLOT_BACKPACK, FLAG_NOLIMIT));
+
+	BotCampaignPolicy campaignPolicy { .allowedRegions = { { "nearby-hunt", { hunt, 1 }, 4 } } };
+	auto campaign = BotCampaign::begin(campaignPolicy);
+	ASSERT_EQ(BotCampaignState::Running, campaign.state);
+	BotLootPolicy lootPolicy { .rules = { { { .itemTypeId = 3031, .valueCategory = 1, .priority = 1 } } } };
+	BotSupplyPolicy supplyPolicy;
+	const auto experienceBefore = player->getExperience();
+	uint32_t expectedGold = 0;
+
+	for (uint16_t cycle = 0; cycle < campaignPolicy.targetKillCount; ++cycle) {
+		campaign = BotCampaign::recordAttempt(campaign, campaignPolicy);
+		ASSERT_EQ(BotCampaignState::Combat, campaign.state);
+		auto monsterType = std::make_shared<MonsterType>(fmt::format("CampaignMonster{}", cycle));
+		monsterType->info.health = 1;
+		monsterType->info.healthMax = 1;
+		monsterType->info.experience = 100;
+		monsterType->info.lookcorpse = 3994;
+		auto monster = std::make_shared<Monster>(monsterType);
+		ASSERT_TRUE(g_game().placeCreature(monster, hunt, false, true));
+		const auto sourceId = monster->getID();
+		const auto selection = manager.evaluateCombat(fixture.name);
+		ASSERT_EQ(sourceId, selection.selectedCreatureId);
+		const auto base = BotPerception::observe(player);
+		ASSERT_TRUE(base);
+		const auto combat = BotCombat::observe(player, *base);
+		ASSERT_TRUE(combat);
+		const auto target = std::ranges::find(combat->creatures, sourceId, &BotCombatCreatureObservation::id);
+		ASSERT_NE(combat->creatures.end(), target);
+		ASSERT_EQ(BotCombatExecutionOutcome::TargetAcquired, manager.executeCombat(fixture.name, { sourceId, combat->revision, target->signature, player->getPosition() }, std::chrono::milliseconds(cycle * 10 + 1)).outcome);
+		UPDATE_OTSYS_TIME();
+		CombatDamage attackDamage;
+		attackDamage.primary = { COMBAT_PHYSICALDAMAGE, -1 };
+		Combat::doCombatHealth(player, monster, attackDamage, {});
+		ASSERT_EQ(0, monster->getHealth()) << "ordinary Player attack did not defeat campaign fixture";
+		// The integration dispatcher is intentionally stopped; complete the already
+		// authoritative zero-health death boundary synchronously.
+		monster->onDeath();
+		ASSERT_TRUE(monster->isRemoved());
+		campaign = BotCampaign::recordAuthoritativeKill(campaign, sourceId, campaignPolicy);
+
+		const auto corpseTile = g_game().map.getTile(hunt);
+		ASSERT_NE(nullptr, corpseTile);
+		std::shared_ptr<Item> corpse;
+		for (const auto &item : *corpseTile->getItemList()) if (item && item->isCorpse() && item->getContainer()) { corpse = item; break; }
+		ASSERT_NE(nullptr, corpse);
+		auto gold = Item::CreateItem(3031, 1);
+		corpse->getContainer()->internalAddThing(gold);
+		const auto selected = manager.evaluateLoot(fixture.name, hunt, sourceId, {}, lootPolicy);
+		ASSERT_TRUE(selected.selected);
+		BotLootTransferRequest request { .corpsePosition = hunt, .sourceCreatureId = sourceId, .corpseSignature = selected.corpse.signature, .itemTypeId = 3031, .itemSignature = selected.selected->item.signature, .count = 1 };
+		ASSERT_EQ(BotLootTransferOutcome::Pending, manager.executeLoot(fixture.name, request, std::chrono::milliseconds(cycle * 10 + 2), lootPolicy).outcome);
+		ASSERT_EQ(BotLootTransferOutcome::Succeeded, manager.executeLoot(fixture.name, request, std::chrono::milliseconds(cycle * 10 + 3), lootPolicy).outcome);
+		++expectedGold;
+		EXPECT_EQ(expectedGold, std::static_pointer_cast<Cylinder>(player)->getItemTypeCount(3031));
+		EXPECT_EQ(BotSupplyIntent::Continue, manager.evaluateSupplies(fixture.name, supplyPolicy).intent);
+		ASSERT_EQ(RETURNVALUE_NOERROR, g_game().internalRemoveItem(corpse));
+	}
+
+	EXPECT_EQ(10U, campaign.authoritativeKills);
+	EXPECT_EQ(BotCampaignState::Completed, campaign.state);
+	EXPECT_GT(player->getExperience(), experienceBefore);
+	EXPECT_TRUE(BotCampaign::safeSaveBoundary(false, false, false, false));
+	EXPECT_TRUE(manager.logout(fixture.name, true));
+	const auto loadedSession = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, loadedSession);
+	const auto loaded = std::const_pointer_cast<Player>(loadedSession->getPlayer());
+	EXPECT_GT(loaded->getExperience(), experienceBefore);
+	EXPECT_EQ(expectedGold, std::static_pointer_cast<Cylinder>(loaded)->getItemTypeCount(3031));
+	ASSERT_NE(nullptr, loadedSession->getAdventureProgress());
+	ASSERT_NE(nullptr, loadedSession->getAttackExecutionState());
+	EXPECT_EQ(BotAdventureState::Idle, loadedSession->getAdventureProgress()->state);
+	EXPECT_EQ(BotAttackState::Idle, loadedSession->getAttackExecutionState()->state);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, AuthoritativeDeathPersistsTempleRecoveryAndRebuildsSessionState) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	const Position temple(fixture.start.x + 2, fixture.start.y, fixture.start.z);
+	createWalkableTile(fixture.start);
+	createWalkableTile(Position(fixture.start.x + 1, fixture.start.y, fixture.start.z));
+	createWalkableTile(temple);
+	g_game().map.towns.getOrCreateTown(1)->setTemplePos(temple);
+	BotManager manager(g_game());
+	const auto session = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, session);
+	const auto player = std::const_pointer_cast<Player>(session->getPlayer());
+	BotCampaignPolicy policy { .allowedRegions = { { "temple-recovery", { temple, 0 }, 4 } } };
+	auto campaign = BotCampaign::begin(policy);
+
+	auto killerType = std::make_shared<MonsterType>("CampaignRecoveryKiller");
+	auto killer = std::make_shared<Monster>(killerType);
+	ASSERT_TRUE(g_game().placeCreature(killer, Position(fixture.start.x + 1, fixture.start.y, fixture.start.z), false, true));
+	CombatDamage lethal;
+	lethal.primary = { COMBAT_PHYSICALDAMAGE, -player->getHealth() };
+	ASSERT_TRUE(g_game().combatChangeHealth(killer, player, lethal));
+	ASSERT_EQ(0, player->getHealth());
+	EXPECT_EQ(BotSurvivalState::Dead, manager.observeDeath(fixture.name).state);
+	player->onDeath();
+	EXPECT_EQ(temple, player->getLoginPosition());
+	campaign = BotCampaign::recordDeath(campaign, player->getID(), policy);
+	EXPECT_EQ(BotCampaignState::Recovering, campaign.state);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	EXPECT_EQ(nullptr, session->getAdventureProgress());
+	EXPECT_EQ(nullptr, session->getAttackExecutionState());
+	EXPECT_TRUE(g_game().removeCreature(killer, true));
+
+	const auto recoveredSession = loginBotOrReport(manager, fixture.name);
+	ASSERT_NE(nullptr, recoveredSession);
+	const auto recovered = std::const_pointer_cast<Player>(recoveredSession->getPlayer());
+	EXPECT_EQ(temple, recovered->getPosition());
+	campaign = BotCampaign::reconstruct(campaign, 1, recovered->getPosition(), policy.allowedRegions.front(), policy);
+	EXPECT_EQ(BotCampaignState::Resumed, campaign.state);
+	EXPECT_FALSE(campaign.freshObservationRequired);
+	ASSERT_NE(nullptr, recoveredSession->getAdventureProgress());
+	ASSERT_NE(nullptr, recoveredSession->getRouteProgress());
+	EXPECT_EQ(BotAdventureState::Idle, recoveredSession->getAdventureProgress()->state);
+	EXPECT_EQ(BotRouteState::Idle, recoveredSession->getRouteProgress()->state);
+	EXPECT_TRUE(manager.logout(fixture.name, false));
+	ASSERT_TRUE(fixture.cleanup());
+}

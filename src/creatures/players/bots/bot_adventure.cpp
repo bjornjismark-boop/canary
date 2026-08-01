@@ -141,3 +141,22 @@ BotAdventureProgress BotAdventure::cancel(BotAdventureProgress progress) {
 	}
 	return progress;
 }
+
+std::optional<BotConfiguredRegion> BotCampaign::selectRegion(const BotCampaignPolicy &policy, const std::vector<std::string> &reachableRegionIds) {
+	for (const auto &region : policy.allowedRegions) if (std::ranges::find(reachableRegionIds, region.id) != reachableRegionIds.end()) return region;
+	return std::nullopt;
+}
+
+BotCampaignProgress BotCampaign::begin(const BotCampaignPolicy &policy, std::chrono::milliseconds now) {
+	BotCampaignProgress progress;
+	if (policy.targetKillCount < 10 || policy.maximumKillAttempts < policy.targetKillCount || policy.allowedRegions.empty()) { progress.state=BotCampaignState::Failed;progress.failure=policy.allowedRegions.empty()?BotCampaignFailure::NoReachableRegion:BotCampaignFailure::KillAttemptLimit;return progress; }
+	progress.state=BotCampaignState::Running;progress.selectedRegionId=policy.allowedRegions.front().id;progress.startedAt=now;return progress;
+}
+
+BotCampaignProgress BotCampaign::recordAttempt(BotCampaignProgress progress, const BotCampaignPolicy &policy, std::chrono::milliseconds now) { if(progress.state==BotCampaignState::Completed||progress.state==BotCampaignState::Failed||progress.state==BotCampaignState::Cancelled)return progress;if(now-progress.startedAt>=policy.maximumDuration){progress.state=BotCampaignState::Failed;progress.failure=BotCampaignFailure::DurationLimit;return progress;}if(++progress.killAttempts>policy.maximumKillAttempts){progress.state=BotCampaignState::Failed;progress.failure=BotCampaignFailure::KillAttemptLimit;}else progress.state=BotCampaignState::Combat;return progress; }
+BotCampaignProgress BotCampaign::recordAuthoritativeKill(BotCampaignProgress progress, uint64_t evidence, const BotCampaignPolicy &policy) { if(evidence==0||evidence==progress.lastDeathEvidence)return progress;progress.lastDeathEvidence=evidence;++progress.authoritativeKills;progress.state=progress.authoritativeKills>=policy.targetKillCount?BotCampaignState::Completed:BotCampaignState::Loot;progress.freshObservationRequired=true;return progress; }
+BotCampaignProgress BotCampaign::recordCombatFailure(BotCampaignProgress progress, const BotCampaignPolicy &policy) { if(++progress.combatFailures>policy.maximumCombatFailures){progress.state=BotCampaignState::Failed;progress.failure=BotCampaignFailure::CombatFailureLimit;}else progress.state=BotCampaignState::Running;return progress; }
+BotCampaignProgress BotCampaign::recordDeath(BotCampaignProgress progress, uint64_t evidence, const BotCampaignPolicy &policy) { progress.lastDeathEvidence=evidence;progress.freshObservationRequired=true;if(++progress.recoveryAttempts>policy.maximumRecoveryAttempts){progress.state=BotCampaignState::Failed;progress.failure=BotCampaignFailure::RecoveryLimit;}else progress.state=BotCampaignState::Recovering;return progress; }
+BotCampaignProgress BotCampaign::reconstruct(BotCampaignProgress progress, uint64_t revision, const Position &position, const BotConfiguredRegion &region, const BotCampaignPolicy &) { if(revision==0||revision==progress.lastObservationRevision){progress.failure=BotCampaignFailure::StaleObservation;return progress;}progress.lastObservationRevision=revision;if(!BotAdventure::contains(region.area,position)){progress.state=BotCampaignState::Failed;progress.failure=BotCampaignFailure::NoReachableRegion;return progress;}progress.state=BotCampaignState::Resumed;progress.failure=BotCampaignFailure::None;progress.freshObservationRequired=false;return progress; }
+bool BotCampaign::safeSaveBoundary(bool combatActive, bool movementActive, bool lootActive, bool survivalActive) { return !combatActive&&!movementActive&&!lootActive&&!survivalActive; }
+BotCampaignProgress BotCampaign::cancel(BotCampaignProgress progress) { progress.state=BotCampaignState::Cancelled;progress.failure=BotCampaignFailure::Cancelled;progress.freshObservationRequired=true;return progress; }
