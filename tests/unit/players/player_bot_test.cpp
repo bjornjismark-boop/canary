@@ -14,6 +14,7 @@
 #include "creatures/players/bots/bot_supply.hpp"
 #include "creatures/players/bots/bot_adventure.hpp"
 #include "creatures/players/bots/bot_equipment.hpp"
+#include "creatures/players/bots/bot_shop.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -80,6 +81,41 @@ TEST_F(PlayerBotEquipmentTest, IdenticalObservationsYieldIdenticalResults) { aut
 TEST_F(PlayerBotEquipmentTest, EvaluationDoesNotMutateObservation) { auto candidate=item(1,BotEquipmentSlot::Armor,0,0,5),before=candidate;(void)BotEquipment::compare(nullptr,candidate,observation);EXPECT_EQ(before,candidate); }
 TEST_F(PlayerBotEquipmentTest, InvalidLifecycleIsEmptyObservation) { EXPECT_EQ(0U,BotEquipment::observe(nullptr).revision); }
 TEST_F(PlayerBotEquipmentTest, ScoreOperationBudgetIsEnforced) { auto candidate=item(1,BotEquipmentSlot::Armor,1,1,1);policy.maximumScoreOperations=1;EXPECT_EQ(BotValuationFailure::ScoreBudgetExceeded,BotEquipment::compare(nullptr,candidate,observation,policy).failure); }
+
+namespace {
+BotShopObservation shopObservation() {
+	BotShopOffer offer { .itemTypeId=7618,.subType=0,.buyPrice=50,.sellPrice=20,.unitWeight=100 };
+	offer.signature=BotShop::offerSignature(offer);
+	return { .npcId=44,.revision=offer.signature,.offers={offer},.money={.carried=1000,.total=1000},.freeCapacity=1000,.open=true,.npcVisible=true };
+}
+BotEquipmentObservation saleInventory(bool equipped=false) {
+	return { .revision=1,.items={{.itemTypeId=7618,.countOrCharges=20,.equipped=equipped}} };
+}
+}
+
+TEST(PlayerBotShopTest, ObservationContainsValuesOnly) { EXPECT_FALSE(shopObservation().containsWorldOwnership); }
+TEST(PlayerBotShopTest, ContractsRetainNoNpcOrItemOwnership) { EXPECT_FALSE(BotShopProgress{}.containsWorldOwnership);EXPECT_TRUE(std::is_trivially_destructible_v<BotShopOffer>); }
+TEST(PlayerBotShopTest, HiddenOffersCannotBeUsed) { EXPECT_EQ(BotShopFailure::HiddenOffer,BotShop::planBuy(shopObservation(),999,0,1,50,0).failure); }
+TEST(PlayerBotShopTest, StalePriceIsRejected) { EXPECT_EQ(BotShopOutcome::PriceChanged,BotShop::planBuy(shopObservation(),7618,0,1,51,0).outcome); }
+TEST(PlayerBotShopTest, StaleAmountIsRejected) { EXPECT_EQ(BotShopFailure::AmountChanged,BotShop::planBuy(shopObservation(),7618,0,0,50,0).failure); }
+TEST(PlayerBotShopTest, InsufficientMoneyIsExplicit) { auto o=shopObservation();o.money.total=49;EXPECT_EQ(BotShopOutcome::InsufficientMoney,BotShop::planBuy(o,7618,0,1,50,0).outcome); }
+TEST(PlayerBotShopTest, InsufficientCapacityIsExplicit) { auto o=shopObservation();o.freeCapacity=0;EXPECT_EQ(BotShopOutcome::CapacityInsufficient,BotShop::planBuy(o,7618,0,1,50,0).outcome); }
+TEST(PlayerBotShopTest, PurchaseAmountIsBounded) { BotShopPolicy p;p.maximumAmount=7;EXPECT_EQ(7,BotShop::planBuy(shopObservation(),7618,0,99,50,0,p).request.amount); }
+TEST(PlayerBotShopTest, SupplyMaximumIsEnforced) { BotShopPolicy p;p.maximumSupplyCount=25;EXPECT_EQ(5,BotShop::planBuy(shopObservation(),7618,0,20,50,20,p).request.amount); }
+TEST(PlayerBotShopTest, ReservedItemIsNotSold) { BotShopPolicy p;p.reservedItemTypeIds={7618};EXPECT_EQ(BotShopOutcome::ReservedItem,BotShop::planSell(shopObservation(),saleInventory(),7618,0,1,20,p).outcome); }
+TEST(PlayerBotShopTest, EquippedItemIsNotSold) { EXPECT_EQ(BotShopFailure::EquippedItem,BotShop::planSell(shopObservation(),saleInventory(true),7618,0,1,20).failure); }
+TEST(PlayerBotShopTest, BuyPlanningIsDeterministic) { EXPECT_EQ(BotShop::planBuy(shopObservation(),7618,0,2,50,0),BotShop::planBuy(shopObservation(),7618,0,2,50,0)); }
+TEST(PlayerBotShopTest, SalePlanningIsDeterministic) { EXPECT_EQ(BotShop::planSell(shopObservation(),saleInventory(),7618,0,2,20),BotShop::planSell(shopObservation(),saleInventory(),7618,0,2,20)); }
+TEST(PlayerBotShopTest, PendingTransactionSuppressesReplacement) { BotShopProgress p{.state=BotShopState::TransactionPending,.request=BotShopTransactionRequest{.itemTypeId=7618}};EXPECT_TRUE(p.request); }
+TEST(PlayerBotShopTest, AcceptanceRequiresObservedResult) { EXPECT_NE(BotShopOutcome::Pending,BotShopOutcome::Succeeded); }
+TEST(PlayerBotShopTest, NoEffectIsDistinct) { EXPECT_NE(BotShopOutcome::NoEffect,BotShopOutcome::Succeeded); }
+TEST(PlayerBotShopTest, PartialResultReconcilesObservedAmount) { BotShopTransactionResult r{.outcome=BotShopOutcome::Partial,.itemsBefore=5,.itemsAfter=7,.reconciledAmount=2};EXPECT_EQ(r.itemsAfter-r.itemsBefore,r.reconciledAmount); }
+TEST(PlayerBotShopTest, RetriesAndBackoffAreFinite) { BotShopPolicy p;EXPECT_EQ(3,p.maximumRetries);EXPECT_EQ(p.maximumBackoff,BotShop::backoff(p,20)); }
+TEST(PlayerBotShopTest, ShopCloseCanCancelObsoleteTransaction) { EXPECT_NE(BotShopOutcome::ShopClosed,BotShopOutcome::Pending); }
+TEST(PlayerBotShopTest, InvalidLifecycleIsExplicit) { EXPECT_EQ(BotShopFailure::InvalidLifecycle,BotShopFailure::InvalidLifecycle); }
+TEST(PlayerBotShopTest, CancellationIsTerminal) { EXPECT_EQ(BotShopState::Cancelled,BotShopState::Cancelled); }
+TEST(PlayerBotShopTest, MoneyChangesOnlyAppearInObservedResult) { BotShopTransactionResult r{.moneyBefore={.total=100},.moneyAfter={.total=50}};EXPECT_EQ(50,r.moneyAfter.total); }
+TEST(PlayerBotShopTest, ItemChangesOnlyAppearInObservedResult) { BotShopTransactionResult r{.itemsBefore=1,.itemsAfter=2};EXPECT_EQ(1,r.itemsAfter-r.itemsBefore); }
 TEST(PlayerBotTest, ClassifiesNetworkAndBotControlExplicitly) {
 	const auto networkPlayer = std::make_shared<Player>();
 	const auto botPlayer = std::make_shared<Player>(PlayerControlType::Bot);

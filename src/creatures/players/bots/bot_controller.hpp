@@ -14,6 +14,7 @@
 #include "creatures/players/bots/bot_supply.hpp"
 #include "creatures/players/bots/bot_adventure.hpp"
 #include "creatures/players/bots/bot_equipment.hpp"
+#include "creatures/players/bots/bot_shop.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -69,6 +70,10 @@ public:
 	[[nodiscard]] const BotAdventureProgress &getAdventureProgress() const { return adventureProgress; }
 	[[nodiscard]] BotEquipmentObservation evaluateEquipment(const BotEquipmentPolicy & = {});
 	[[nodiscard]] const std::optional<BotEquipmentObservation> &getEquipmentObservation() const { return equipmentObservation; }
+	[[nodiscard]] BotShopObservation observeShop(uint32_t npcId, uint16_t maximumOffers = 256);
+	[[nodiscard]] BotShopTransactionResult executeShop(const BotShopTransactionRequest &, std::chrono::milliseconds now, const BotShopPolicy & = {});
+	[[nodiscard]] BotShopTransactionResult cancelShop();
+	[[nodiscard]] const BotShopProgress &getShopProgress() const { return shopProgress; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -94,4 +99,5 @@ private:
 	bool survivalLootBlocked = false;
 	BotAdventureProgress adventureProgress;
 	std::optional<BotEquipmentObservation> equipmentObservation;
+	BotShopProgress shopProgress;
 };

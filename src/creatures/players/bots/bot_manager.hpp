@@ -55,6 +55,9 @@ public:
 	[[nodiscard]] BotSupplyAssessment evaluateSupplies(const std::string &, const BotSupplyPolicy & = {}, uint64_t expectedInventorySignature = 0);
 	[[nodiscard]] BotAdventureProgress advanceAdventure(const std::string &, const BotAdventureObservation &, std::chrono::milliseconds, const BotAdventurePolicy & = {});
 	[[nodiscard]] BotEquipmentObservation evaluateEquipment(const std::string &, const BotEquipmentPolicy & = {});
+	[[nodiscard]] BotShopObservation observeShop(const std::string &, uint32_t npcId, uint16_t maximumOffers = 256);
+	[[nodiscard]] BotShopTransactionResult executeShop(const std::string &, const BotShopTransactionRequest &, std::chrono::milliseconds, const BotShopPolicy & = {});
+	[[nodiscard]] BotShopTransactionResult cancelShop(const std::string &);
 
 	[[nodiscard]] size_t size() const {
 		return sessions.size();

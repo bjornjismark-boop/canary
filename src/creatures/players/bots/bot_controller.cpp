@@ -733,3 +733,163 @@ BotEquipmentObservation BotController::evaluateEquipment(const BotEquipmentPolic
 	equipmentObservation = BotEquipment::observe(controlledPlayer, policy);
 	return *equipmentObservation;
 }
+
+BotShopObservation BotController::observeShop(uint32_t npcId, uint16_t maximumOffers) {
+	const auto controlledPlayer = player.lock();
+	if (!controlledPlayer || controlledPlayer->isRemoved() || !controlledPlayer->getTile()) {
+		return {};
+	}
+	return BotShop::observe(controlledPlayer, npcId, maximumOffers);
+}
+
+BotShopTransactionResult BotController::executeShop(const BotShopTransactionRequest &request, std::chrono::milliseconds now, const BotShopPolicy &policy) {
+	BotShopTransactionResult result { .request = request };
+	const auto controlledPlayer = player.lock();
+	if (!controlledPlayer || controlledPlayer->isRemoved() || !controlledPlayer->getTile()) {
+		result.outcome = BotShopOutcome::Cancelled;
+		result.failure = BotShopFailure::InvalidLifecycle;
+		result.state = BotShopState::Failed;
+		return result;
+	}
+
+	const auto observation = BotShop::observe(controlledPlayer, request.npcId);
+	const uint32_t currentItems = static_cast<const Cylinder &>(*controlledPlayer).getItemTypeCount(request.itemTypeId);
+	result.moneyAfter = observation.money;
+	result.itemsAfter = currentItems;
+
+	if (shopProgress.request) {
+		result.request = *shopProgress.request;
+		result.moneyBefore = shopProgress.moneyBefore;
+		result.itemsBefore = shopProgress.itemsBefore;
+		result.attempts = shopProgress.attempts;
+		if (*shopProgress.request != request) {
+			result.outcome = BotShopOutcome::Pending;
+			result.state = shopProgress.state;
+			return result;
+		}
+		if (shopProgress.state == BotShopState::Backoff) {
+			if (now < shopProgress.nextAttemptAt) {
+				result.outcome = BotShopOutcome::RetryScheduled;
+				result.state = BotShopState::Backoff;
+				return result;
+			}
+			const uint8_t previousAttempts = shopProgress.attempts;
+			shopProgress = {};
+			auto retried = executeShop(request, now, policy);
+			if (retried.outcome == BotShopOutcome::Pending && shopProgress.request) {
+				shopProgress.attempts = static_cast<uint8_t>(previousAttempts + 1);
+				retried.attempts = shopProgress.attempts;
+			}
+			return retried;
+		}
+		if (!observation.npcVisible) {
+			shopProgress = {};
+			result.outcome = BotShopOutcome::NpcUnavailable;
+			result.failure = BotShopFailure::NpcUnavailable;
+			result.state = BotShopState::Failed;
+			return result;
+		}
+		if (!observation.open) {
+			shopProgress = {};
+			result.outcome = BotShopOutcome::ShopClosed;
+			result.failure = BotShopFailure::ShopClosed;
+			result.state = BotShopState::Failed;
+			return result;
+		}
+
+		const uint32_t changed = request.kind == BotShopTransactionKind::Buy
+			? (currentItems > shopProgress.itemsBefore ? currentItems - shopProgress.itemsBefore : 0)
+			: (shopProgress.itemsBefore > currentItems ? shopProgress.itemsBefore - currentItems : 0);
+		const bool moneyChanged = request.kind == BotShopTransactionKind::Buy
+			? observation.money.total < shopProgress.moneyBefore.total
+			: observation.money.total > shopProgress.moneyBefore.total;
+		if (changed != 0 && moneyChanged) {
+			result.reconciledAmount = std::min<uint32_t>(changed, request.amount);
+			result.outcome = changed >= request.amount ? BotShopOutcome::Succeeded : BotShopOutcome::Partial;
+			result.state = BotShopState::Completed;
+			shopProgress = {};
+			return result;
+		}
+		if (now - shopProgress.startedAt < policy.timeout) {
+			result.outcome = BotShopOutcome::Pending;
+			result.state = BotShopState::VerifyingResult;
+			shopProgress.state = BotShopState::VerifyingResult;
+			return result;
+		}
+		if (shopProgress.attempts < policy.maximumRetries) {
+			shopProgress.state = BotShopState::Backoff;
+			shopProgress.nextAttemptAt = now + BotShop::backoff(policy, shopProgress.attempts - 1);
+			result.outcome = BotShopOutcome::RetryScheduled;
+			result.failure = BotShopFailure::TimedOut;
+			result.state = BotShopState::Backoff;
+			return result;
+		}
+		shopProgress = {};
+		result.outcome = BotShopOutcome::RetryExhausted;
+		result.failure = BotShopFailure::RetryExhausted;
+		result.state = BotShopState::Failed;
+		return result;
+	}
+
+	if (!observation.npcVisible || !observation.open) {
+		result.outcome = observation.npcVisible ? BotShopOutcome::ShopClosed : BotShopOutcome::NpcUnavailable;
+		result.failure = observation.npcVisible ? BotShopFailure::ShopClosed : BotShopFailure::NpcUnavailable;
+		result.state = BotShopState::Failed;
+		return result;
+	}
+	if (observation.revision != request.shopRevision) {
+		result.outcome = BotShopOutcome::PriceChanged;
+		result.failure = BotShopFailure::StaleObservation;
+		result.state = BotShopState::Failed;
+		return result;
+	}
+
+	BotShopOutcome planned = BotShopOutcome::OfferUnavailable;
+	BotShopFailure failure = BotShopFailure::None;
+	if (request.kind == BotShopTransactionKind::Buy) {
+		const auto plan = BotShop::planBuy(observation, request.itemTypeId, request.subType, request.amount, request.observedPrice, currentItems, policy);
+		planned = plan.outcome;
+		failure = plan.failure;
+	} else {
+		const auto inventory = BotEquipment::observe(controlledPlayer);
+		const auto plan = BotShop::planSell(observation, inventory, request.itemTypeId, request.subType, request.amount, request.observedPrice, policy);
+		planned = plan.outcome;
+		failure = plan.failure;
+	}
+	if (planned != BotShopOutcome::Pending) {
+		result.outcome = planned;
+		result.failure = failure;
+		result.state = BotShopState::Failed;
+		return result;
+	}
+
+	shopProgress.state = BotShopState::TransactionPending;
+	shopProgress.request = request;
+	shopProgress.moneyBefore = observation.money;
+	shopProgress.itemsBefore = currentItems;
+	shopProgress.attempts = 1;
+	shopProgress.startedAt = now;
+	result.moneyBefore = observation.money;
+	result.itemsBefore = currentItems;
+	result.attempts = 1;
+	if (request.kind == BotShopTransactionKind::Buy) {
+		game.playerBuyItem(controlledPlayer->getID(), request.itemTypeId, request.subType, request.amount, request.ignoreCapacity, request.inBackpacks);
+	} else {
+		game.playerSellItem(controlledPlayer->getID(), request.itemTypeId, request.subType, request.amount, false);
+	}
+	result.outcome = BotShopOutcome::Pending;
+	result.state = BotShopState::TransactionPending;
+	return result;
+}
+
+BotShopTransactionResult BotController::cancelShop() {
+	BotShopTransactionResult result { .outcome=BotShopOutcome::Cancelled,.failure=BotShopFailure::Cancelled,.state=BotShopState::Cancelled };
+	if (shopProgress.request) {
+		result.request = *shopProgress.request;
+		result.moneyBefore = shopProgress.moneyBefore;
+		result.itemsBefore = shopProgress.itemsBefore;
+		result.attempts = shopProgress.attempts;
+	}
+	shopProgress = {};
+	return result;
+}

@@ -35,6 +35,8 @@ target_sources(
 			players/bots/bot_adventure.hpp
 			players/bots/bot_equipment.cpp
 			players/bots/bot_equipment.hpp
+			players/bots/bot_shop.cpp
+			players/bots/bot_shop.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp
