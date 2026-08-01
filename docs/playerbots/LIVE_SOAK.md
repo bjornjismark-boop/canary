@@ -54,13 +54,12 @@ tools/run-playerbots-live-soak.sh \
   --output-root /home/playerbots/workspace/playerbots/logs/playerbots-soak
 ```
 
-The verified Linux release build uses the repository preset with unity disabled
-because the current PlayerBot sources contain translation-unit-local helper
-names that collide in a unity source:
+The verified Linux release build uses the repository preset and the standalone
+`canary` target:
 
 ```sh
-cmake --preset linux-release -DSPEED_UP_BUILD_UNITY=OFF
-cmake --build --preset linux-release --target canary -j6
+cmake --preset linux-release
+cmake --build --preset linux-release --target canary -j2
 ```
 
 The resulting standalone server is `/home/playerbots/workspace/playerbots/canary/canary`.
@@ -79,22 +78,50 @@ the artifact manifest SHA-256 is
 `682570bdb666ca394558d1b6474ffe0e919b5eeccd30172a06d3849fe69f7463`.
 This is smoke evidence only: `PRODUCTION_SOAK=NO` and `RELEASE_SOAK=NOT_RUN`.
 
+## Ping-timeout regression evidence
+
+The 2026-08-01 pre-release regression smoke ran for 600 seconds with 20 managed
+PlayerBots, one ordinary protocol player, and one completed controlled restart.
+It passed with peak population 20/20, zero managed ping timeouts, zero unexpected
+managed logouts or logins, zero unscheduled session replacements, 463,888
+dispatcher samples, 760 clean invariant evaluations, and cleanup PASS. RSS was
+1,420,728 KiB initially, 1,423,084 KiB peak, and 1,422,560 KiB final. Artifacts
+are under `/home/playerbots/workspace/playerbots/logs/playerbots-soak/20260801-201026-1708785`.
+The standalone executable SHA-256 is
+`32873a7813b9320799e70bd8a0f0e8433fb4327016ee2e311a31c0bc9e4932c4`;
+the artifact manifest SHA-256 is
+`d8ac8a292e664f34e102e31a710b96a6d976d890553214770f2d3347cf91cfa4`.
+This remains pre-release smoke evidence only: `PRODUCTION_SOAK=NO`,
+`RELEASE_SOAK=NOT_RUN`, `M9E_COMPLETE=NO`, and `M9_COMPLETE=NO`.
+
+## Preserved failed diagnostic
+
+The interrupted 2026-08-01 release-profile diagnostic is preserved unchanged at
+`/home/playerbots/workspace/playerbots/logs/playerbots-soak/20260801-191251-1686585`.
+It requested 7,200 seconds, 20 managed bots, one ordinary player, and three
+restarts, but was interrupted after 12 distinct managed bots were removed by
+the network ping timeout. Reconciliation hid that churn behind a final
+20-managed/20-placed snapshot. The result is FAIL, cleanup is PASS,
+`releaseSoak` is `NOT_RUN`, and its zero-byte `invariants.json` records the
+harness defect fixed by the subsequent churn-aware invariant writer. The
+preserved `SHA256SUMS` file has SHA-256
+`886dc71b49f3f01fdbc9727addde4fd9b2971ea85d9ac9fecf6b9153afbb0935`.
+
 ## Final release soak
 
-The roadmap currently does not approve a finite duration or release population.
-Those two values must be approved before execution. The exact next command is:
+The qualifying release soak has not run. The exact approved rerun command is:
 
 ```sh
 tools/run-playerbots-live-soak.sh \
   --env /home/playerbots/.config/playerbots/canary-test.env \
-  --config /absolute/path/to/test-config/config.lua \
+  --config /home/playerbots/workspace/playerbots/canary/config.lua.dist \
   --server /home/playerbots/workspace/playerbots/canary/canary \
   --profile release \
-  --duration-seconds <ROADMAP_REQUIRED_DURATION> \
-  --bots <APPROVED_RELEASE_POPULATION> \
+  --duration-seconds 7200 \
+  --bots 20 \
   --restarts 3 \
   --output-root /home/playerbots/workspace/playerbots/logs/playerbots-soak
 ```
 
-Do not replace the placeholders or set `PRODUCTION_SOAK=YES` until duration and
-scale are approved and a live Canary plus ordinary protocol client genuinely run.
+Do not set `PRODUCTION_SOAK=YES`, `M9E_COMPLETE=YES`, or `M9_COMPLETE=YES`
+unless this qualifying run genuinely completes with its release criteria met.
