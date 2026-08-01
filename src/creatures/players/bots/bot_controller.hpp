@@ -17,6 +17,7 @@
 #include "creatures/players/bots/bot_shop.hpp"
 #include "creatures/players/bots/bot_resupply.hpp"
 #include "creatures/players/bots/bot_dialogue.hpp"
+#include "creatures/players/bots/bot_quest.hpp"
 
 #ifndef USE_PRECOMPILED_HEADERS
 	#include <cstdint>
@@ -85,6 +86,10 @@ public:
 	[[nodiscard]] BotConversationResult advanceDialogue(uint32_t npcId, BotDialogueIntent, std::chrono::milliseconds, const BotNpcDialoguePolicy & = {});
 	[[nodiscard]] BotConversationResult cancelDialogue();
 	[[nodiscard]] const BotDialogueProgress &getDialogueProgress() const { return dialogueProgress; }
+	[[nodiscard]] BotQuestObservation observeQuest(const BotQuestDefinition &, std::vector<BotQuestEvidence> = {}, const BotQuestBounds & = {});
+	[[nodiscard]] BotQuestEligibility evaluateQuest(BotMissionId, const BotQuestDefinition &, const BotNpcDialoguePolicy & = {}, const BotQuestBounds & = {});
+	void clearQuestAssessment() { questObservation.reset(); }
+	[[nodiscard]] const std::optional<BotQuestObservation> &getQuestObservation() const { return questObservation; }
 
 private:
 	[[nodiscard]] BotAction selectAction(const BotObservation &observation) const;
@@ -113,4 +118,5 @@ private:
 	BotShopProgress shopProgress;
 	BotResupplyProgress resupplyProgress;
 	BotDialogueProgress dialogueProgress;
+	std::optional<BotQuestObservation> questObservation;
 };

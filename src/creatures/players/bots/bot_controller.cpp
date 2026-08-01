@@ -745,6 +745,9 @@ BotConversationResult BotController::advanceDialogue(uint32_t npcId,BotDialogueI
 #undef TALKTYPE_PRIVATE_PN
 BotConversationResult BotController::cancelDialogue(){const auto npcId=dialogueProgress.npcId;dialogueProgress={.state=BotDialogueState::Cancelled};return{.state=BotDialogueState::Cancelled,.response=BotDialogueResponse::Cancelled,.failure=BotDialogueFailure::Cancelled,.npcId=npcId,.intent=BotDialogueIntent::Cancel};}
 
+BotQuestObservation BotController::observeQuest(const BotQuestDefinition &definition,std::vector<BotQuestEvidence> evidence,const BotQuestBounds &bounds){const auto controlled=player.lock();if(!controlled||controlled->isRemoved()||!controlled->getTile()){questObservation.reset();return{};}questObservation=BotQuest::observe(controlled,definition,std::move(evidence),bounds);return *questObservation;}
+BotQuestEligibility BotController::evaluateQuest(BotMissionId missionId,const BotQuestDefinition &definition,const BotNpcDialoguePolicy &dialoguePolicy,const BotQuestBounds &bounds){if(!questObservation||questObservation->definitionRevision!=definition.revision)return{.result=BotQuestFailure::ObservationStale};const auto mission=std::ranges::find(definition.missions,missionId,&BotMissionDefinition::id);if(mission==definition.missions.end())return{.result=BotQuestFailure::PolicyRejected};return BotQuest::evaluate(*questObservation,*mission,observeDialogue(dialoguePolicy),bounds);}
+
 BotShopObservation BotController::observeShop(uint32_t npcId, uint16_t maximumOffers) {
 	const auto controlledPlayer = player.lock();
 	if (!controlledPlayer || controlledPlayer->isRemoved() || !controlledPlayer->getTile()) {

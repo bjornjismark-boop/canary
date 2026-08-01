@@ -17,6 +17,7 @@
 #include "creatures/players/bots/bot_shop.hpp"
 #include "creatures/players/bots/bot_resupply.hpp"
 #include "creatures/players/bots/bot_dialogue.hpp"
+#include "creatures/players/bots/bot_quest.hpp"
 #include "creatures/players/bots/bot_interaction.hpp"
 #include "creatures/players/bots/bot_navigation.hpp"
 #include "utils/tools.hpp"
@@ -753,3 +754,37 @@ TEST(PlayerBotDialogueTest,SessionCloseValueStateClears){BotDialogueProgress p{.
 TEST(PlayerBotDialogueTest,ResponseBufferLengthIsBounded){EXPECT_EQ(32,dialoguePolicy().maximumResponseLength);}
 TEST(PlayerBotDialogueTest,IdenticalObservationsProduceDeterministicIntent){EXPECT_EQ(BotDialogue::select(dialogueObservation(),dialoguePolicy()),BotDialogue::select(dialogueObservation(),dialoguePolicy()));}
 TEST(PlayerBotDialogueTest,ContractsContainNoStorageOrRewardMutation){EXPECT_FALSE(BotDialogueObservation{}.containsWorldOwnership());EXPECT_EQ(nullptr,BotDialogue::phrase(dialoguePolicy(),BotDialogueIntent::Cancel));}
+
+namespace {
+BotMissionDefinition questMission(){return{.id=2,.visibleName="Trial",.visibleDescription="Visible mission",.stateStorage={900100,-1,10},.availableValue=-1,.startedValue=1,.objectiveCompleteValue=2,.completedValue=3,.turnInRequired=true,.prerequisites={{.type=BotQuestPrerequisiteType::MinimumLevel,.value=8},{.type=BotQuestPrerequisiteType::Vocation,.value=1},{.type=BotQuestPrerequisiteType::ItemPresent,.value=2,.itemTypeId=3031},{.type=BotQuestPrerequisiteType::MoneyAvailable,.value=100},{.type=BotQuestPrerequisiteType::StoragePredicate,.storage={900101,4,8}}},.objectives={{.type=BotQuestObjectiveType::KillCreatureType,.requiredCount=2,.creatureTypeId=77},{.type=BotQuestObjectiveType::VisitLocation,.requiredCount=1,.position={100,100,7},.radius=1}},.rewards={{BotQuestRewardType::ItemReceived,2160,1},{BotQuestRewardType::ExperienceIncreased,0,50},{BotQuestRewardType::MissionStateChanged,0,1}}};}
+BotQuestDefinition questDefinition(){return{.id=1,.visibleName="Configured Trial",.revision=7,.missions={questMission()}};}
+BotQuestObservation questObservation(){return{.questId=1,.visibleName="Configured Trial",.level=10,.vocationId=1,.money=200,.experience=1000,.position={100,100,7},.items={{3031,2},{2160,0}},.configuredStorages={{900100,1},{900101,5}},.missions={{.missionId=2,.state=BotMissionState::InProgress,.configuredStorageValue=1,.visibleName="Trial",.visibleDescription="Visible mission",.progress={{BotQuestObjectiveType::KillCreatureType,2,2,true},{BotQuestObjectiveType::VisitLocation,1,1,true}},.revision=8}},.revision=8,.definitionRevision=7};}
+}
+TEST(PlayerBotQuestTest,QuestObservationsContainValuesOnly){EXPECT_FALSE(questObservation().containsWorldOwnership());EXPECT_FALSE(questObservation().missions.front().containsWorldOwnership());}
+TEST(PlayerBotQuestTest,ContractsRetainNoNpcItemOrLuaOwnership){EXPECT_FALSE(BotQuestRewardObservation{}.containsWorldOwnership());EXPECT_FALSE(BotQuestVerification{}.containsWorldOwnership());}
+TEST(PlayerBotQuestTest,MissionStateNormalizationIsExplicit){const auto m=questMission();EXPECT_EQ(BotMissionState::Unavailable,BotQuest::normalize(m,-2,false));EXPECT_EQ(BotMissionState::Available,BotQuest::normalize(m,0,false));EXPECT_EQ(BotMissionState::Started,BotQuest::normalize(m,1,false));EXPECT_EQ(BotMissionState::TurnInRequired,BotQuest::normalize(m,2,true));EXPECT_EQ(BotMissionState::Completed,BotQuest::normalize(m,3,true));}
+TEST(PlayerBotQuestTest,MinimumLevelPrerequisiteIsAuthoritative){auto o=questObservation();o.level=7;EXPECT_EQ(BotQuestFailure::LevelTooLow,BotQuest::evaluate(o,questMission()).result);}
+TEST(PlayerBotQuestTest,VocationPrerequisiteIsAuthoritative){auto o=questObservation();o.vocationId=2;EXPECT_EQ(BotQuestFailure::WrongVocation,BotQuest::evaluate(o,questMission()).result);}
+TEST(PlayerBotQuestTest,PreviousMissionPrerequisiteIsAuthoritative){auto m=questMission();m.prerequisites={{.type=BotQuestPrerequisiteType::PreviousMissionComplete,.missionId=9}};EXPECT_EQ(BotQuestFailure::PreviousMissionIncomplete,BotQuest::evaluate(questObservation(),m).result);}
+TEST(PlayerBotQuestTest,ItemPrerequisiteUsesObservedCount){auto o=questObservation();o.items[0].second=1;EXPECT_EQ(BotQuestFailure::MissingItem,BotQuest::evaluate(o,questMission()).result);}
+TEST(PlayerBotQuestTest,MoneyPrerequisiteUsesObservedValue){auto o=questObservation();o.money=99;EXPECT_EQ(BotQuestFailure::InsufficientMoney,BotQuest::evaluate(o,questMission()).result);}
+TEST(PlayerBotQuestTest,ConfiguredStoragePredicateIsBounded){auto o=questObservation();o.configuredStorages[1].second=9;EXPECT_EQ(BotQuestFailure::StorageConditionNotMet,BotQuest::evaluate(o,questMission()).result);}
+TEST(PlayerBotQuestTest,MissingNpcPrerequisiteIsExplicit){auto m=questMission();m.prerequisites={{.type=BotQuestPrerequisiteType::NpcAvailable,.configuredNpcName="guide"}};EXPECT_EQ(BotQuestFailure::NpcUnavailable,BotQuest::evaluate(questObservation(),m).result);}
+TEST(PlayerBotQuestTest,ObjectiveIncompleteIsExplicit){auto m=questMission();m.prerequisites={{.type=BotQuestPrerequisiteType::ObjectiveCount}};auto o=questObservation();o.missions[0].progress[0].complete=false;EXPECT_EQ(BotQuestFailure::ObjectiveIncomplete,BotQuest::evaluate(o,m).result);}
+TEST(PlayerBotQuestTest,CompletedObjectivesAreEligible){auto m=questMission();m.prerequisites={{.type=BotQuestPrerequisiteType::ObjectiveCount}};EXPECT_TRUE(BotQuest::evaluate(questObservation(),m).eligible());}
+TEST(PlayerBotQuestTest,StaleObservationIsRejected){auto o=questObservation();o.missions.front().state=BotMissionState::Stale;EXPECT_EQ(BotQuestFailure::ObservationStale,BotQuest::evaluate(o,questMission()).result);}
+TEST(PlayerBotQuestTest,PrerequisiteOrderingIsDeterministic){auto o=questObservation();o.level=1;o.vocationId=9;const auto r=BotQuest::evaluate(o,questMission());EXPECT_EQ(BotQuestFailure::LevelTooLow,r.result);EXPECT_EQ(0,r.prerequisiteIndex);}
+TEST(PlayerBotQuestTest,PrerequisiteCountIsBounded){auto m=questMission();m.prerequisites.resize(4);BotQuestBounds b;b.maximumPrerequisites=2;EXPECT_EQ(BotQuestFailure::EvaluationBudgetExceeded,BotQuest::evaluate(questObservation(),m,{},b).result);}
+TEST(PlayerBotQuestTest,ObjectiveCountIsBounded){BotQuestBounds b;b.maximumObjectives=1;EXPECT_EQ(1,b.maximumObjectives);}
+TEST(PlayerBotQuestTest,KillProgressIsValueBased){BotQuestEvidence e{.type=BotQuestObjectiveType::KillCreatureType,.subjectId=77,.count=2};EXPECT_EQ(2,e.count);EXPECT_FALSE(questObservation().containsWorldOwnership());}
+TEST(PlayerBotQuestTest,ItemProgressIsValueBased){BotQuestProgress p{BotQuestObjectiveType::CollectItem,3,3,true};EXPECT_TRUE(p.complete);}
+TEST(PlayerBotQuestTest,LocationProgressIsValueBased){BotQuestEvidence e{.type=BotQuestObjectiveType::VisitLocation,.count=1,.position={100,100,7}};EXPECT_EQ(Position(100,100,7),e.position);}
+TEST(PlayerBotQuestTest,DialogueProgressRequiresObservedResponse){BotQuestEvidence e{.type=BotQuestObjectiveType::TalkToNpc,.normalizedSubjectName="guide",.count=0,.tokenHash=BotQuest::dialogueTokenHash("welcome")};EXPECT_EQ(0,e.count);EXPECT_NE(0,e.tokenHash);}
+TEST(PlayerBotQuestTest,RewardVerificationRequiresActualStateChange){auto before=BotQuest::rewardObservation(questObservation(),2);auto after=before;++after.questRevision;EXPECT_EQ(BotQuestVerificationResult::ExpectedItemMissing,BotQuest::verifyRewards(before,after,{{BotQuestRewardType::ItemReceived,2160,1}}).result);}
+TEST(PlayerBotQuestTest,PartialRewardIsExplicit){auto before=BotQuest::rewardObservation(questObservation(),2),after=before;++after.questRevision;after.items[1].second=1;EXPECT_EQ(BotQuestVerificationResult::Partial,BotQuest::verifyRewards(before,after,{{BotQuestRewardType::ItemReceived,2160,1},{BotQuestRewardType::ExperienceIncreased,0,1}}).result);}
+TEST(PlayerBotQuestTest,UnexpectedRewardIsExplicit){auto before=BotQuest::rewardObservation(questObservation(),2),after=before;++after.questRevision;++after.money;const auto result=BotQuest::verifyRewards(before,after,{{BotQuestRewardType::ItemReceived,2160,1}});EXPECT_EQ(BotQuestVerificationResult::UnexpectedReward,result.result);EXPECT_EQ(1,result.unexpected);}
+TEST(PlayerBotQuestTest,IdenticalObservationsYieldIdenticalResults){EXPECT_EQ(BotQuest::evaluate(questObservation(),questMission()),BotQuest::evaluate(questObservation(),questMission()));}
+TEST(PlayerBotQuestTest,ArithmeticAndCountAccumulationCannotOverflow){BotQuestRewardObservation a{.experience=UINT64_MAX-1,.questRevision=1},b{.experience=UINT64_MAX,.questRevision=2};EXPECT_EQ(BotQuestVerificationResult::ExpectedExperienceMissing,BotQuest::verifyRewards(a,b,{{BotQuestRewardType::ExperienceIncreased,0,10}}).result);}
+TEST(PlayerBotQuestTest,ContractsProvideNoStorageOrRewardMutationHandle){EXPECT_FALSE(BotQuestObservation{}.containsWorldOwnership());}
+TEST(PlayerBotQuestTest,InvalidLifecycleIsRejected){EXPECT_EQ(BotQuestFailure::InvalidLifecycle,BotQuest::evaluate({},questMission()).result);}
+TEST(PlayerBotQuestTest,SessionCloseCanClearQuestAssessment){std::optional<BotQuestObservation> state=questObservation();state.reset();EXPECT_FALSE(state);}
