@@ -349,13 +349,13 @@ Botten ska kunna återställa sin jaktberedskap och förbättra sig genom normal
 ### Leverabler
 
 - [x] item valuation/profile
-- [ ] sellable loot
-- [ ] buy list
-- [ ] NPC shop adapter
+- [x] sellable loot
+- [x] buy list
+- [x] NPC shop adapter
 - [ ] mat, potions och ammunition
 - [x] equipment comparison
 - [ ] equip/unequip
-- [ ] pengar och köpbudget
+- [x] pengar och köpbudget
 - [ ] depot eller definierad storage
 - [ ] återuppta avbruten hunt
 
@@ -366,13 +366,23 @@ scoring täcker requirements, slots, weapon/armor/shield-stats, range, modifiers
 duration, weight, supplies, hysteresis, overflow och stabila tie-breakers utan att
 flytta, utrusta, köpa, sälja eller behålla Item/Container-ägarskap. Komplett gate:
 build 0, unit 300/300, databasbackad integration 62/62, diff 0. Source commit
-`6df23c044`. M6B shoptransaktioner och M6C depot/resupply/equipment execution
-återstår; full M6 är fortsatt öppen.
+`6df23c044`.
+
+M6B-evidens: endast den aktuella spelarens öppnade NPC-shopoffers observeras som
+värden. Deterministiska köp- och säljplaner revaliderar offer, pris, subtype,
+amount, pengar, kapacitet, supplytak, reserver och utrustning innan Canarys
+ordinarie `Game::playerBuyItem`/`Game::playerSellItem`-väg används. Resultat kräver
+observerade money- och inventorydeltan; partial, no-effect, focusförlust, timeout
+och finit retry är explicita. En normalregistrerad isolerad NPC-fixture bevisar
+M2-approach, öppnad shop, verkligt köp och sälj samt säker teardown. Komplett gate:
+build 0, unit 323/323, databasbackad integration 67/67, diff 0. Source commit
+`5d67ea50d`. M6C depot/resupply/equipment execution återstår; full M6 är fortsatt
+öppen.
 
 ### Acceptance
 
-- [ ] bot säljer endast tillåtna loot-items;
-- [ ] bot köper supplies utan direkt money/item mutation;
+- [x] bot säljer endast tillåtna loot-items;
+- [x] bot köper supplies utan direkt money/item mutation;
 - [ ] bot utrustar ett verifierbart bättre item;
 - [ ] otillräckliga pengar leder till ny plan;
 - [ ] resupply följs av återgång till jakt.
