@@ -20,7 +20,7 @@ BotLootFailure failureFor(BotLootEligibility eligibility) {
 	return static_cast<BotLootFailure>(eligibility);
 }
 
-uint16_t distance(const Position &from, const Position &to) {
+uint16_t lootDistance(const Position &from, const Position &to) {
 	return static_cast<uint16_t>(std::max(Position::getDistanceX(from, to), Position::getDistanceY(from, to)));
 }
 
@@ -128,7 +128,7 @@ BotLootSelectionResult BotLoot::observe(const std::shared_ptr<Player> &player, c
 		result.failure = BotLootFailure::NotVisible;
 		return result;
 	}
-	if (distance(player->getPosition(), position) > policy.maxDistance) {
+	if (lootDistance(player->getPosition(), position) > policy.maxDistance) {
 		result.eligibility = BotLootEligibility::TooFar;
 		result.failure = BotLootFailure::TooFar;
 		return result;

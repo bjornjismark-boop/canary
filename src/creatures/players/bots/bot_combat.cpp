@@ -19,7 +19,7 @@
 namespace {
 int32_t bounded(int64_t value, int32_t limit) { return static_cast<int32_t>(std::clamp<int64_t>(value, -std::max(limit, 0), std::max(limit, 0))); }
 uint8_t percent(uint64_t value, uint64_t maximum) { return maximum == 0 ? 0 : static_cast<uint8_t>(std::min<uint64_t>(100, value * 100 / maximum)); }
-uint16_t distance(const Position &a, const Position &b) { return static_cast<uint16_t>(std::max(Position::getDistanceX(a, b), Position::getDistanceY(a, b))); }
+uint16_t combatDistance(const Position &a, const Position &b) { return static_cast<uint16_t>(std::max(Position::getDistanceX(a, b), Position::getDistanceY(a, b))); }
 }
 
 uint64_t BotCombat::signature(const BotCombatCreatureObservation &c) {
@@ -58,7 +58,7 @@ std::optional<BotCombatObservation> BotCombat::observe(const std::shared_ptr<Pla
 		BotCombatCreatureObservation observed { .id = visible.id, .position = visible.position, .healthPercent = visible.healthPercent,
 			.attackingBot = creature->getAttackedCreature() == player, .followingBot = creature->getFollowCreature() == player,
 			.recentlyDamagedBot = damageMap.contains(visible.id),
-			.deadOrRemoved = creature->getHealth() <= 0, .directDistance = distance(base.position, visible.position),
+			.deadOrRemoved = creature->getHealth() <= 0, .directDistance = combatDistance(base.position, visible.position),
 			.reachability = BotCombatReachability::Unknown, .visibility = BotCombatVisibility::Visible, .revision = result.revision };
 		if (creature->isSummon()) { observed.kind = BotCombatCreatureKind::Summon; const auto master = creature->getMaster(); if (master == player || (master && std::ranges::find(base.visibleCreatures, master->getID(), &BotCreatureObservation::id) != base.visibleCreatures.end())) observed.summonMasterId = master->getID(); }
 		else if (creature->getPlayer()) observed.kind = BotCombatCreatureKind::Player;
@@ -93,7 +93,7 @@ BotRangeAssessment BotCombat::assessRange(const BotCombatObservation &observatio
 	if (creature.reachability != BotCombatReachability::Reachable) return BotRangeAssessment::Unreachable;
 	if (observation.self.weapon == BotWeaponCategory::Unknown || observation.self.attackRange == 0) return BotRangeAssessment::UnknownWeaponRange;
 	if (!lineOfSightClear && observation.self.weapon != BotWeaponCategory::Melee && observation.self.weapon != BotWeaponCategory::None) return BotRangeAssessment::LineOfSightBlocked;
-	const auto range = distance(observation.self.position, creature.position);
+	const auto range = combatDistance(observation.self.position, creature.position);
 	if (range == 0) return BotRangeAssessment::TooClose;
 	return range <= observation.self.attackRange ? BotRangeAssessment::InRange : BotRangeAssessment::TooFar;
 }
@@ -110,10 +110,10 @@ BotCombatPositionResult BotCombat::position(const BotObservation &observation, c
 	Position best;
 	BotRouteResult bestRoute;
 	for (const auto &tile : observation.visibleTiles) {
-		const auto candidateDistance = distance(tile.position, creature.position);
+		const auto candidateDistance = combatDistance(tile.position, creature.position);
 		if (tile.position.z != observation.position.z || candidateDistance == 0 || candidateDistance > combat.self.attackRange) continue;
 		if (!tile.hasGround || tile.terrainBlocked || tile.blockingItemTypeId || tile.blockingCreatureId) continue;
-		if (distance(policy.maxDistanceFromOrigin ? result.request.origin : observation.position, tile.position) > policy.maxDistanceFromOrigin) continue;
+		if (combatDistance(policy.maxDistanceFromOrigin ? result.request.origin : observation.position, tile.position) > policy.maxDistanceFromOrigin) continue;
 		if (requireLineOfSight && combat.self.weapon != BotWeaponCategory::Melee && !g_game().canThrowObjectTo(tile.position, creature.position, SightLine_CheckSightLineAndFloor, combat.self.attackRange, combat.self.attackRange)) continue;
 		++result.evaluatedPositions;
 		auto route = BotNavigation::findRoute(observation, { observation.position, tile.position, policy.routeLimits });

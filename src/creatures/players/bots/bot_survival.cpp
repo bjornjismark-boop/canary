@@ -10,7 +10,7 @@
 
 namespace {
 int32_t cap(int64_t value, int32_t limit) { return static_cast<int32_t>(std::clamp<int64_t>(value, 0, std::max(limit, 0))); }
-uint16_t distance(const Position &a, const Position &b) { return static_cast<uint16_t>(std::max(Position::getDistanceX(a, b), Position::getDistanceY(a, b))); }
+uint16_t survivalDistance(const Position &a, const Position &b) { return static_cast<uint16_t>(std::max(Position::getDistanceX(a, b), Position::getDistanceY(a, b))); }
 }
 
 uint8_t BotSurvival::percentage(uint64_t value, uint64_t maximum) {
@@ -54,9 +54,9 @@ BotFleeResult BotSurvival::selectFlee(const BotObservation &o, const BotCombatOb
 	BotFleeResult result; uint64_t best = 0; Position bestPosition; BotRouteResult bestRoute;
 	const auto limit = std::min<size_t>(p.maxCandidates, o.visibleTiles.size());
 	const BotRouteLimits limits { .maxExpandedNodes = p.maxCandidates, .maxRouteLength = p.maxRouteLength, .maxPlanningOperations = static_cast<uint32_t>(p.maxCandidates) * 16, .maxReplans = p.maxAttempts, .maxNoProgress = p.maxNoProgress, .initialBackoff = p.initialBackoff, .maximumBackoff = p.maximumBackoff };
-	for (size_t i = 0; i < limit; ++i) { const auto &tile = o.visibleTiles[i]; if (tile.position == o.position || tile.position.z != o.position.z || !tile.hasGround || tile.terrainBlocked || tile.blockingItemTypeId || tile.blockingCreatureId || tile.hazardous || distance(o.position, tile.position) > p.maxFleeRadius) continue;
+	for (size_t i = 0; i < limit; ++i) { const auto &tile = o.visibleTiles[i]; if (tile.position == o.position || tile.position.z != o.position.z || !tile.hasGround || tile.terrainBlocked || tile.blockingItemTypeId || tile.blockingCreatureId || tile.hazardous || survivalDistance(o.position, tile.position) > p.maxFleeRadius) continue;
 		auto route = BotNavigation::findRoute(o, { o.position, tile.position, limits }); if (!route.found()) continue;
-		uint64_t nearest = p.maxFleeRadius + 1; uint64_t adjacent = 0; for (const auto &hostile : combat.creatures) { if (hostile.visibility != BotCombatVisibility::Visible || hostile.kind != BotCombatCreatureKind::Monster) continue; const auto d = distance(tile.position, hostile.position); nearest = std::min(nearest, static_cast<uint64_t>(d)); if (d <= 1) ++adjacent; }
+		uint64_t nearest = p.maxFleeRadius + 1; uint64_t adjacent = 0; for (const auto &hostile : combat.creatures) { if (hostile.visibility != BotCombatVisibility::Visible || hostile.kind != BotCombatCreatureKind::Monster) continue; const auto d = survivalDistance(tile.position, hostile.position); nearest = std::min(nearest, static_cast<uint64_t>(d)); if (d <= 1) ++adjacent; }
 		const uint64_t distanceScore = nearest * 1000;
 		const uint64_t routeScore = route.positions.size() <= p.maxRouteLength ? (p.maxRouteLength - route.positions.size()) * 10 : 0;
 		const uint64_t penalty = std::min<uint64_t>(adjacent * 100, distanceScore + routeScore);
