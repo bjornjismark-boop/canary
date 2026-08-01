@@ -225,7 +225,8 @@ class Client:
                 # payload bytes as if each occurrence were a standalone ping.
                 decrypt_frame(recv_frame(self.sock), self.key)
             if time.monotonic() >= next_heartbeat:
-                self.sock.sendall(encrypted_frame(b"\x1d", self.key)); next_heartbeat = time.monotonic() + self.config.heartbeat
+                # Canary records legacy client 0x1E as the authoritative pong.
+                self.sock.sendall(encrypted_frame(b"\x1e", self.key)); next_heartbeat = time.monotonic() + self.config.heartbeat
         self.logout(); return 0
 
 

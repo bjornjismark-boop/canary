@@ -32,7 +32,7 @@ class OrdinaryClientTest(unittest.TestCase):
         name=b"Ordinary Soak"; world=b"world"; payload=b"\x64\x01"+struct.pack("<H",len(name))+name+struct.pack("<H",len(world))+world+b"\0"*6
         ordinary.parse_character_list(payload,"Ordinary Soak")
     def test_game_login_success_marker(self): self.assertEqual(0x0A,b"\x0a"[0])
-    def test_keepalive_packet(self): self.assertEqual(b"\x1d",ordinary.decrypt_frame(ordinary.encrypted_frame(b"\x1d",(1,2,3,4))[2:],(1,2,3,4)))
+    def test_keepalive_packet(self): self.assertEqual(b"\x1e",ordinary.decrypt_frame(ordinary.encrypted_frame(b"\x1e",(1,2,3,4))[2:],(1,2,3,4)))
     def test_logout_packet(self):
         client=ordinary.Client(ordinary.Config.from_values(self.values())); client.sock=mock.Mock(); client.logout(); self.assertTrue(client.sock.sendall.called)
     def test_unexpected_disconnect(self):
