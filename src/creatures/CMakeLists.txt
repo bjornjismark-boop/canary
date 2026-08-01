@@ -61,6 +61,8 @@ target_sources(
 			players/bots/bot_fleet_configuration.hpp
 			players/bots/bot_fleet_telemetry.cpp
 			players/bots/bot_fleet_telemetry.hpp
+			players/bots/bot_fleet_hardening.cpp
+			players/bots/bot_fleet_hardening.hpp
             players/bots/bot_controller.cpp
 			players/bots/bot_interaction.cpp
             players/bots/bot_controller.hpp

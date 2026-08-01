@@ -319,6 +319,7 @@
 	<ClCompile Include="..\src\creatures\players\bots\bot_fleet.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_fleet_configuration.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_fleet_telemetry.cpp" />
+	<ClCompile Include="..\src\creatures\players\bots\bot_fleet_hardening.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_controller.cpp" />
 	<ClCompile Include="..\src\creatures\players\bots\bot_interaction.cpp" />
     <ClCompile Include="..\src\creatures\players\bots\bot_manager.cpp" />

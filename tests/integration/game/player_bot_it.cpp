@@ -18,6 +18,7 @@
 #include "creatures/players/bots/bot_fleet.hpp"
 #include "creatures/players/bots/bot_fleet_configuration.hpp"
 #include "creatures/players/bots/bot_fleet_telemetry.hpp"
+#include "creatures/players/bots/bot_fleet_hardening.hpp"
 #include "creatures/players/grouping/party.hpp"
 #include "creatures/combat/combat.hpp"
 #include "creatures/combat/condition.hpp"
@@ -328,6 +329,31 @@ TEST(PlayerBotIntegrationTest, FleetAdminTelemetryObservesOrdinarySessionAndQueu
 	auto status=service.handle(manager,{.operatorId=42,.encodedSize=16,.credential="fixture"});ASSERT_TRUE(status.success());ASSERT_TRUE(status.snapshot);EXPECT_EQ(1,status.snapshot->managedSessions);EXPECT_EQ(1,status.snapshot->plannerHealthy);
 	auto command=service.handle(manager,{.operation=BotFleetAdminOperation::Command,.operatorId=42,.window=1,.encodedSize=32,.credential="fixture",.command={.type=BotFleetCommandType::LogoutMember,.memberName=fixture.name}});ASSERT_EQ(BotFleetCommandState::Accepted,command.command.state);EXPECT_EQ(1,admin.queued());const auto completed=admin.process(manager);ASSERT_EQ(1,completed.size());EXPECT_EQ(BotFleetCommandState::Completed,completed.front().state);EXPECT_EQ(nullptr,session->getPlayer());
 	service.stop();telemetry.stop();admin.stop();ASSERT_TRUE(fixture.cleanup());EXPECT_FALSE(fixture.hasCommittedRows());
+}
+
+TEST(PlayerBotIntegrationTest, FleetHardeningReconstructsThreeCyclesWithoutDuplicateSessionOrReservation) {
+	PlayerBotDatabaseFixture first(g_database(), Position(31500, 31500, 7));
+	PlayerBotDatabaseFixture second(g_database(), Position(31501, 31500, 7));
+	createWalkableTile(first.start);
+	createWalkableTile(second.start);
+	for (uint32_t cycle = 0; cycle < 3; ++cycle) {
+		BotManager manager(g_game());
+		BotFleetPopulationPolicy population { .desiredOnline=2, .minimumOnline=0, .maximumOnline=2, .absoluteHardMaximum=2, .maximumLoginsPerInterval=2, .maximumLogoutsPerInterval=2, .maximumPendingLogins=2, .maximumPendingLogouts=2, .maximumRetries=3, .revision=cycle + 1 };
+		ASSERT_EQ(BotFleetFailure::None, manager.configureFleet(population, {}, {{.id=first.playerId,.name=first.name,.coordinationGroupId=91},{.id=second.playerId,.name=second.name,.coordinationGroupId=91}}, 10));
+		auto reconciliation = manager.reconcileFleet(cycle * 10 + 1);
+		ASSERT_EQ(2, reconciliation.requests.size());
+		ASSERT_EQ(2, manager.size());
+		EXPECT_EQ(nullptr, manager.login(first.name));
+		BotCoordinationPolicy coordination { .id=91, .configuredMembers={first.playerId,second.playerId}, .configuredLeader=first.playerId, .revision=cycle + 1 };
+		ASSERT_EQ(BotCoordinationFailure::None, manager.configureCoordinationGroup(coordination));
+		EXPECT_EQ(0, manager.coordinationReservationCount());
+		ASSERT_TRUE(manager.clear(false));
+		manager.stopFleet(false);
+		EXPECT_EQ(0, manager.size());
+		EXPECT_EQ(0, manager.coordinationReservationCount());
+	}
+	ASSERT_TRUE(first.cleanup());
+	ASSERT_TRUE(second.cleanup());
 }
 
 TEST(PlayerBotIntegrationTest, MultiBotCoordinationObservesPartyAndDelegatesFormationToM2) {
