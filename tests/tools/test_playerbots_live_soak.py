@@ -72,15 +72,21 @@ class LiveSoakTest(unittest.TestCase):
             soak.write_checksums(root)
             self.assertEqual(len(soak.ARTIFACTS),len(root.joinpath("SHA256SUMS").read_text().splitlines()))
     def test_graceful_shutdown_targets_exact_child(self):
-        child=mock.Mock(pid=321); child.poll.return_value=None; child.wait.return_value=0
+        child=mock.Mock(pid=321,returncode=0); child.poll.return_value=None; child.wait.return_value=0
         run=soak.Run(argparse.Namespace(),{},Path("."),server=child,identity="77")
         with mock.patch.object(soak,"proc_identity",return_value="77"),mock.patch.object(os,"kill") as kill:
             run.stop(); kill.assert_called_once_with(321,soak.signal.SIGTERM)
+    def test_abnormal_controlled_shutdown_is_rejected(self):
+        child=mock.Mock(pid=432,returncode=-6); child.poll.return_value=None; child.wait.return_value=-6
+        run=soak.Run(argparse.Namespace(),{},Path("."),server=child,identity="78")
+        with mock.patch.object(soak,"proc_identity",return_value="78"),mock.patch.object(os,"kill"):
+            with self.assertRaisesRegex(soak.SoakError,"status -6"): run.stop()
     def test_forced_timeout_cleanup_targets_same_child(self):
-        child=mock.Mock(pid=654); child.poll.return_value=None; child.wait.side_effect=[subprocess.TimeoutExpired("server",30),0]
+        child=mock.Mock(pid=654,returncode=-9); child.poll.return_value=None; child.wait.side_effect=[subprocess.TimeoutExpired("server",30),0]
         run=soak.Run(argparse.Namespace(),{},Path("."),server=child,identity="88")
         with mock.patch.object(soak,"proc_identity",return_value="88"),mock.patch.object(os,"kill") as kill:
-            run.stop(); self.assertEqual([mock.call(654,soak.signal.SIGTERM),mock.call(654,soak.signal.SIGKILL)],kill.call_args_list)
+            with self.assertRaisesRegex(soak.SoakError,"did not complete"): run.stop()
+            self.assertEqual([mock.call(654,soak.signal.SIGTERM),mock.call(654,soak.signal.SIGKILL)],kill.call_args_list)
 
 
 if __name__ == "__main__": unittest.main()

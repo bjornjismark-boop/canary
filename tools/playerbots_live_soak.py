@@ -367,13 +367,19 @@ class Run:
         raise SoakError("server readiness timeout")
 
     def stop(self) -> None:
-        if not self.server or self.server.poll() is not None: return
+        if not self.server: return
+        prior_status = self.server.poll()
+        if prior_status is not None:
+            raise SoakError(f"server exited before controlled shutdown with status {prior_status}")
         if proc_identity(self.server.pid) != self.identity: raise SoakError("PID identity changed")
         os.kill(self.server.pid, signal.SIGTERM)
         try: self.server.wait(timeout=30)
         except subprocess.TimeoutExpired:
             os.kill(self.server.pid, signal.SIGKILL)
             self.server.wait(timeout=10)
+            raise SoakError("server did not complete controlled shutdown")
+        if self.server.returncode != 0:
+            raise SoakError(f"server controlled shutdown failed with status {self.server.returncode}")
 
     def sample(self, writer: csv.writer) -> None:
         assert self.server
