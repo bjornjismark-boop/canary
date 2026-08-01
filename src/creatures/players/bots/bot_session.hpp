@@ -12,6 +12,7 @@
 	#include <functional>
 	#include <memory>
 	#include <string>
+	#include <string_view>
 #endif
 
 class Game;
@@ -20,6 +21,8 @@ class BotManager;
 enum class ManagedPlayerRemovalResult : uint8_t;
 
 struct BotSessionOperations {
+	std::function<bool(std::string_view)> admitLoad;
+	std::function<bool(const std::shared_ptr<Player> &)> admitPlacement;
 	std::function<bool(const std::shared_ptr<Player> &)> save;
 	std::function<ManagedPlayerRemovalResult(
 		const std::shared_ptr<Player> &,

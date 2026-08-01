@@ -383,6 +383,49 @@ TEST(PlayerBotIntegrationTest, FleetHardeningResourcePressureBlocksLoginAndRecov
 	ASSERT_TRUE(fixture.cleanup());
 }
 
+TEST(PlayerBotIntegrationTest, FleetHardeningDatabaseAdmissionFailureBacksOffAndRecoversWithoutDuplicateSession) {
+	PlayerBotDatabaseFixture fixture(g_database(), Position(31520, 31520, 7));
+	createWalkableTile(fixture.start);
+	size_t loadAttempts = 0;
+	BotSessionOperations operations;
+	operations.admitLoad = [&](std::string_view) { return ++loadAttempts > 1; };
+	BotManager manager(g_game(), std::move(operations));
+	BotFleetPopulationPolicy population { .desiredOnline=1, .minimumOnline=0, .maximumOnline=1, .absoluteHardMaximum=1, .maximumLoginsPerInterval=1, .maximumLogoutsPerInterval=1, .maximumPendingLogins=1, .maximumPendingLogouts=1, .maximumRetries=3, .maximumRetryBackoffTicks=4, .revision=1 };
+	ASSERT_EQ(BotFleetFailure::None, manager.configureFleet(population, {}, {{.id=fixture.playerId,.name=fixture.name}}, 10));
+	ASSERT_EQ(1, manager.reconcileFleet(1).requests.size());
+	EXPECT_EQ(0, manager.size());
+	EXPECT_EQ(nullptr, g_game().getPlayerByName(fixture.name));
+	EXPECT_TRUE(manager.reconcileFleet(2).requests.empty());
+	auto recovered = manager.reconcileFleet(3);
+	ASSERT_EQ(1, recovered.requests.size());
+	EXPECT_EQ(2, loadAttempts);
+	EXPECT_EQ(1, manager.size());
+	EXPECT_EQ(nullptr, manager.login(fixture.name));
+	ASSERT_TRUE(manager.clear(false));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
+TEST(PlayerBotIntegrationTest, FleetHardeningFailedPlacementLeavesNoWorldSessionAndRecoversOnce) {
+	PlayerBotDatabaseFixture fixture(g_database(), Position(31530, 31530, 7));
+	createWalkableTile(fixture.start);
+	size_t placementAttempts = 0;
+	BotSessionOperations operations;
+	operations.admitPlacement = [&](const std::shared_ptr<Player> &) { return ++placementAttempts > 1; };
+	BotManager manager(g_game(), std::move(operations));
+	BotFleetPopulationPolicy population { .desiredOnline=1, .minimumOnline=0, .maximumOnline=1, .absoluteHardMaximum=1, .maximumLoginsPerInterval=1, .maximumLogoutsPerInterval=1, .maximumPendingLogins=1, .maximumPendingLogouts=1, .maximumRetries=3, .maximumRetryBackoffTicks=4, .revision=1 };
+	ASSERT_EQ(BotFleetFailure::None, manager.configureFleet(population, {}, {{.id=fixture.playerId,.name=fixture.name}}, 10));
+	ASSERT_EQ(1, manager.reconcileFleet(1).requests.size());
+	EXPECT_EQ(0, manager.size());
+	EXPECT_EQ(nullptr, g_game().getPlayerByName(fixture.name));
+	EXPECT_TRUE(manager.reconcileFleet(2).requests.empty());
+	ASSERT_EQ(1, manager.reconcileFleet(3).requests.size());
+	EXPECT_EQ(2, placementAttempts);
+	EXPECT_EQ(1, manager.size());
+	EXPECT_EQ(1, std::ranges::count_if(g_game().getPlayers(), [&](const auto &entry) { return entry.second->getName() == fixture.name; }));
+	ASSERT_TRUE(manager.clear(false));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
 TEST(PlayerBotIntegrationTest, MultiBotCoordinationObservesPartyAndDelegatesFormationToM2) {
 	const Position origin(31000,31000,7), memberStart(31001,31000,7), objective(31002,31000,7),formationDestination(31003,30999,7);
 	PlayerBotDatabaseFixture first(g_database(),origin),second(g_database(),memberStart);for(int x=0;x<=3;++x)for(int y=-1;y<=1;++y)createWalkableTile(Position(origin.x+x,origin.y+y,origin.z));

@@ -64,6 +64,10 @@ BotFleetAdminResponse BotFleetAdminService::handle(const BotManager &manager, Bo
 	if (request.encodedSize > policy.maximumRequestBytes) return reject(BotFleetTelemetryFailure::RequestTooLarge);
 	if (!authenticate || !authenticate(request.operatorId, request.credential)) return reject(BotFleetTelemetryFailure::Unauthorized);
 	request.credential.clear();
+	if ((request.submittedAtTick != 0 || request.handledAtTick != 0)
+	    && (request.handledAtTick < request.submittedAtTick || request.handledAtTick - request.submittedAtTick > policy.maximumRequestAgeTicks)) {
+		return reject(BotFleetTelemetryFailure::TimedOut);
+	}
 	if (request.window != activeWindow) { activeWindow = request.window; requestsInWindow = 0; }
 	if (requestsInWindow >= policy.maximumRequestsPerWindow) return reject(BotFleetTelemetryFailure::RateLimited);
 	++requestsInWindow;

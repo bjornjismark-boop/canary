@@ -19,7 +19,7 @@
 
 class BotManager;
 
-enum class BotFleetTelemetryFailure : uint8_t { None, InvalidRequest, Unauthorized, Disabled, RateLimited, RequestTooLarge, ResponseTooLarge, Stopping, Count };
+enum class BotFleetTelemetryFailure : uint8_t { None, InvalidRequest, Unauthorized, Disabled, RateLimited, TimedOut, RequestTooLarge, ResponseTooLarge, Stopping, Count };
 enum class BotFleetAdminOperation : uint8_t { Status, Audit, Events, Command };
 enum class BotFleetAdminTransport : uint8_t { Disabled, Localhost, UnixSocket };
 
@@ -54,6 +54,7 @@ struct BotFleetTelemetryEvent {
 struct BotFleetAdminServicePolicy {
 	BotFleetAdminTransport transport = BotFleetAdminTransport::Disabled;
 	uint16_t maximumRequestsPerWindow = 32;
+	uint32_t maximumRequestAgeTicks = 64;
 	uint32_t maximumRequestBytes = 4096;
 	uint32_t maximumResponseBytes = 65536;
 	uint16_t maximumAuditResults = 64;
@@ -64,6 +65,8 @@ struct BotFleetAdminRequest {
 	BotFleetAdminOperation operation = BotFleetAdminOperation::Status;
 	uint64_t operatorId = 0;
 	uint64_t window = 0;
+	uint64_t submittedAtTick = 0;
+	uint64_t handledAtTick = 0;
 	uint32_t encodedSize = 0;
 	uint16_t limit = 0;
 	std::string credential;

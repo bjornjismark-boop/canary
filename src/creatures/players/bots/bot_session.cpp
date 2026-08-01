@@ -15,6 +15,12 @@
 
 BotSession::BotSession(Game &game, BotSessionOperations operations) :
 	game(game), operations(std::move(operations)) {
+	if (!this->operations.admitLoad) {
+		this->operations.admitLoad = [](std::string_view) { return true; };
+	}
+	if (!this->operations.admitPlacement) {
+		this->operations.admitPlacement = [](const std::shared_ptr<Player> &) { return true; };
+	}
 	if (!this->operations.save) {
 		this->operations.save = [](const std::shared_ptr<Player> &player) {
 			return IOLoginData::savePlayer(player);
@@ -60,6 +66,10 @@ bool BotSession::load(const std::string &name) {
 		g_logger().warn("[BotSession::load] Player '{}' is already in the world", name);
 		return false;
 	}
+	if (!operations.admitLoad(name)) {
+		g_logger().warn("[BotSession::load] Load admission rejected for '{}'", name);
+		return false;
+	}
 
 	auto loadedPlayer = std::make_shared<Player>(nullptr, PlayerControlType::Bot);
 	loadedPlayer->setName(name);
@@ -87,6 +97,11 @@ bool BotSession::load(const std::string &name) {
 bool BotSession::place() {
 	if (state != BotSessionState::Loaded || !player) {
 		g_logger().warn("[BotSession::place] Runtime initialization is incomplete");
+		return false;
+	}
+	if (!operations.admitPlacement(player)) {
+		g_logger().warn("[BotSession::place] Placement admission rejected for '{}'", player->getName());
+		player->setOnline(false);
 		return false;
 	}
 
