@@ -492,6 +492,57 @@ class Run:
         writer.writerow([utc(), self.server.pid, self.identity, rss, "" if hwm is None else hwm])
 
 
+def classify_release_summary(summary: dict[str, Any]) -> tuple[bool, str]:
+    """Return production qualification and release-soak state."""
+
+    if summary.get("profile") != "release":
+        return False, "NOT_RUN"
+
+    restart_count = int(summary.get("restartCount", 0) or 0)
+
+    qualified = all((
+        summary.get("result") == "PASS",
+        summary.get("durationSeconds") == 7200,
+        summary.get("configuredBots") == 20,
+        summary.get("peakManagedPopulation") == 20,
+        int(summary.get("humanParticipants", 0) or 0) >= 1,
+        int(summary.get("peakOrdinaryPlayers", 0) or 0) >= 1,
+        restart_count >= 3,
+        int(summary.get("ordinaryClientPlacements", 0) or 0)
+            >= restart_count + 1,
+        int(summary.get("ordinaryActivityCount", 0) or 0) > 0,
+        summary.get("ordinaryConnectedPast1000Seconds") is True,
+        summary.get("unexpectedOrdinaryClientExits") == 0,
+        summary.get("managedPingTimeouts") == 0,
+        summary.get("unexpectedManagedLogouts") == 0,
+        summary.get("unexpectedManagedLogins") == 0,
+        summary.get("unscheduledSessionReplacements") == 0,
+        int(summary.get("duplicateSessions", 0) or 0) == 0,
+        summary.get("invariantFailureCount") == 0,
+        summary.get("rssInitialKb") is not None,
+        summary.get("rssPeakKb") is not None,
+        summary.get("rssFinalKb") is not None,
+        int(summary.get("tickSampleCount", 0) or 0) > 0,
+        summary.get("cleanup") == "PASS",
+    ))
+
+    return qualified, "PASS" if qualified else "FAIL"
+
+def render_summary_markdown(summary: dict[str, Any]) -> str:
+    """Render the authoritative human-readable soak summary."""
+
+    production_marker = (
+        "YES" if summary.get("productionSoak") is True else "NO"
+    )
+    return (
+        "# PlayerBots live soak\n\n"
+        + "\n".join(
+            f"{key}: {value}" for key, value in summary.items()
+        )
+        + f"\n\nPRODUCTION_SOAK={production_marker}\n"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = make_parser().parse_args(argv)
     if not args.server.is_file() or not os.access(args.server, os.X_OK): raise SoakError("server must be one explicit executable file")
@@ -687,8 +738,13 @@ def main(argv: list[str] | None = None) -> int:
                    "cleanup":"PASS" if cleanup_complete else "FAIL",
                    "releaseSoak": "NOT_RUN",
                    "liveSmoke": ("PASS" if env.get("SOAK_CLIENT_COMMAND") else "PARTIAL_SERVER_ONLY") if not run.failed and args.profile == "smoke" else "NOT_RUN"}
+        production_soak, release_soak = classify_release_summary(summary)
+        summary["productionSoak"] = production_soak
+        summary["releaseSoak"] = release_soak
         (directory / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-        (directory / "summary.md").write_text("# PlayerBots live soak\n\n"+"\n".join(f"{key}: {value}" for key,value in summary.items())+"\n\nPRODUCTION_SOAK=NO\n", encoding="utf-8")
+        (directory / "summary.md").write_text(
+            render_summary_markdown(summary), encoding="utf-8"
+        )
         write_checksums(directory)
         print(f"SOAK_OUTPUT={directory}")
     return exit_code
