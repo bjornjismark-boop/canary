@@ -27,6 +27,13 @@ class LiveSoakTest(unittest.TestCase):
         self.assertEqual("playerbots_soak_1", soak.database_name({"TEST_DB_NAME":"playerbots_soak_1", "TEST_DB_ALLOW_RESET":"1"}))
         with self.assertRaises(soak.SoakError): soak.database_name({"TEST_DB_NAME":"production", "TEST_DB_ALLOW_RESET":"1"})
     def test_redaction(self): self.assertEqual("[redacted]", soak.redact({"MYSQL_PASSWORD":"x"})["MYSQL_PASSWORD"])
+    def test_client_exit_diagnostics_are_bounded_and_redacted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); root.joinpath("ordinary-client-events.jsonl").write_text(json.dumps({"connectedRuntimeSeconds":1001,"pongCount":200,"activityCount":3,"connectedGeneration":1})+'\n')
+            root.joinpath("client.log").write_text("x"*900+"\npassword=do-not-leak\n")
+            process=mock.Mock(); process.poll.return_value=1
+            result=soak.client_exit_diagnostics(root,process,"unexpected_disconnect",False)
+            self.assertEqual(3,result["activityCount"]); self.assertLessEqual(len(result["stderrTail"]),1000); self.assertNotIn("do-not-leak",result["stderrTail"])
     def test_invariants(self):
         base = {k: 0 for k in ("offline","loginQueued","loading","placementPending","placed","draining","saving","logoutPending","failed","ordinaryPlayers","lifecycleQueueDepth","commandQueueDepth","coordinationReservations")}
         self.assertEqual([], soak.validate_snapshot(base, 4)); base["duplicateSessions"] = 1

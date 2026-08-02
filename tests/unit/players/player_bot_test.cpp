@@ -139,11 +139,13 @@ TEST(PlayerBotTest, ClassifiesNetworkAndBotControlExplicitly) {
 	EXPECT_TRUE(networkPlayer->isNetworkControlled());
 	EXPECT_FALSE(networkPlayer->isBotControlled());
 	EXPECT_TRUE(networkPlayer->usesNetworkPingTimeout());
+	EXPECT_TRUE(networkPlayer->usesNetworkIdleTimeout());
 
 	EXPECT_EQ(PlayerControlType::Bot, botPlayer->getControlType());
 	EXPECT_FALSE(botPlayer->isNetworkControlled());
 	EXPECT_TRUE(botPlayer->isBotControlled());
 	EXPECT_FALSE(botPlayer->usesNetworkPingTimeout());
+	EXPECT_FALSE(botPlayer->usesNetworkIdleTimeout());
 }
 
 TEST(PlayerBotTest, ManagedBotSurvivesBeyondNetworkPingTimeoutThreshold) {

@@ -809,6 +809,38 @@ TEST(PlayerBotIntegrationTest, OrdinaryNetworkPlayerMovementRemainsUnchanged) {
 	EXPECT_FALSE(fixture.hasCommittedRows());
 }
 
+TEST(PlayerBotIntegrationTest, OrdinaryDirectionTurnResetsIdleWithoutGameplayMutation) {
+	PlayerBotDatabaseFixture fixture(g_database());
+	createWalkableTile(fixture.start);
+	const auto player = std::make_shared<Player>();
+	player->setName(fixture.name);
+	ASSERT_TRUE(IOLoginDataLoad::preLoadPlayer(player, fixture.name));
+	ASSERT_TRUE(IOLoginData::loadPlayerById(player, fixture.playerId, false));
+	player->setID(); player->setOnline(true);
+	ASSERT_TRUE(player->isNetworkControlled());
+	ASSERT_TRUE(g_game().placeCreature(player, fixture.start, false, true));
+	const auto position = player->getPosition();
+	const auto bankBalance = player->getBankBalance();
+	const auto storageValue = player->getStorageValue(987654);
+	std::array<std::shared_ptr<Item>, CONST_SLOT_LAST> inventory {};
+	for (uint8_t slot = CONST_SLOT_FIRST; slot < CONST_SLOT_LAST; ++slot) inventory[slot] = player->getInventoryItem(static_cast<Slots_t>(slot));
+	player->setTestIdleTime(1000000);
+	g_game().playerTurn(player->getID(), DIRECTION_NORTH);
+	EXPECT_EQ(0, player->getIdleTime());
+	EXPECT_EQ(position, player->getPosition());
+	EXPECT_EQ(bankBalance, player->getBankBalance());
+	EXPECT_EQ(storageValue, player->getStorageValue(987654));
+	for (uint8_t slot = CONST_SLOT_FIRST; slot < CONST_SLOT_LAST; ++slot) EXPECT_EQ(inventory[slot], player->getInventoryItem(static_cast<Slots_t>(slot)));
+	player->setTestIdleTime(1000000);
+	g_game().playerTurn(player->getID(), DIRECTION_EAST);
+	EXPECT_EQ(0, player->getIdleTime());
+	EXPECT_EQ(position, player->getPosition());
+	player->setOnline(false);
+	const std::function<bool(const std::shared_ptr<Player> &)> noSave;
+	EXPECT_EQ(ManagedPlayerRemovalResult::Complete, g_game().removeManagedPlayer(player, true, noSave));
+	ASSERT_TRUE(fixture.cleanup());
+}
+
 TEST(PlayerBotIntegrationTest, NavigationValuesOutliveClosedSessionWithoutWorldOwnership) {
 	PlayerBotDatabaseFixture fixture(g_database());
 	createWalkableTile(fixture.start);
