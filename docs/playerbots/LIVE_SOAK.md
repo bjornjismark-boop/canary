@@ -34,6 +34,11 @@ only required repository data directories. It never edits the source config.
 
 The harness automatically launches `tools/playerbots_ordinary_client.py`; operators
 do not construct `SOAK_CLIENT_COMMAND` or pass client credentials on the command line.
+After authoritative placement, the client keeps independent monotonic schedules for
+the legacy `0x1E` pong and a harmless direction turn every 300 seconds. The activity
+alternates `0x6F` (north) and `0x70` (east); Canary's normal `Game::playerTurn` path
+resets ordinary-player idle time without moving the character. Override
+`SOAK_ACTIVITY_SECONDS` only with a finite value from 1 through 600 seconds.
 
 `PLAYERBOTS_SOAK_OUTPUT` enables the server-side local adapter. The harness sets
 it to the private run directory. The adapter has no listener, is disabled by
@@ -106,6 +111,29 @@ the network ping timeout. Reconciliation hid that churn behind a final
 harness defect fixed by the subsequent churn-aware invariant writer. The
 preserved `SHA256SUMS` file has SHA-256
 `886dc71b49f3f01fdbc9727addde4fd9b2971ea85d9ac9fecf6b9153afbb0935`.
+
+The later 2026-08-02 release diagnostic is preserved unchanged at
+`/home/playerbots/workspace/playerbots/logs/playerbots-soak/20260802-072937-1910561`.
+Its ordinary client remained network-live through pongs but was removed after
+approximately 963.927 seconds by the normal 15-minute idle-player enforcement.
+It is failed diagnostic evidence only: result FAIL, client exit 1, cleanup PASS,
+and `releaseSoak` `NOT_RUN`. Its manifest SHA-256 is
+`f480a2fccb2ca43b44075e5343b7962e1565951a6ab1ec4c18bde63c585d9c35`.
+
+## Ordinary idle regression evidence
+
+The 2026-08-02 pre-release regression ran for 1,800 seconds with 20 managed
+PlayerBots and one ordinary protocol player, then completed one controlled restart.
+The ordinary session remained connected for 1,800.290 seconds before the restart,
+sent six normal direction-turn activities, and was authoritatively placed again at
+generation 2. Peak population was 20/20 with zero unexpected client exits, managed
+ping timeouts, unexpected managed logins or logouts, session replacements, duplicate
+sessions, or invariant failures. The run recorded 1,187,084 dispatcher samples;
+RSS was 1,426,616 KiB initially, 1,437,864 KiB peak, and 1,420,920 KiB final.
+Cleanup and all artifact checksums passed. Artifacts are under
+`/home/playerbots/workspace/playerbots/logs/playerbots-soak/20260802-102146-1966231`.
+This is regression smoke only: `PRODUCTION_SOAK=NO`, `RELEASE_SOAK=NOT_RUN`,
+`M9E_COMPLETE=NO`, and `M9_COMPLETE=NO`.
 
 ## Final release soak
 
