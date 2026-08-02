@@ -524,6 +524,10 @@ public:
 		return usesNetworkPingTimeout() && noPongTime >= 60000;
 	}
 
+	[[nodiscard]] bool usesNetworkIdleTimeout() const {
+		return controlType == PlayerControlType::Network;
+	}
+
 #ifdef BUILD_TESTS
 	void setTestIP(uint32_t testIpAddress) {
 		testIP = testIpAddress;

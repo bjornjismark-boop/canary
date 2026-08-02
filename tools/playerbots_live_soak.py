@@ -36,7 +36,7 @@ ARTIFACTS = (
     "client.log", "events.jsonl", "fleet-snapshots.jsonl", "sessions.csv", "rss.csv",
     "ticks.csv", "commands.jsonl", "restarts.jsonl", "faults.json", "invariants.json",
     "summary.json", "summary.md", "ticks.jsonl", "command-requests.jsonl",
-    "ordinary-client-ready.txt", "managed-lifecycle.jsonl",
+    "ordinary-client-ready.txt", "managed-lifecycle.jsonl", "ordinary-client-events.jsonl",
 )
 
 
@@ -275,6 +275,29 @@ def check_loopback_config(path: Path) -> None:
         raise SoakError("test configuration must bind to loopback")
 
 
+def ordinary_client_events(directory: Path) -> list[dict[str, Any]]:
+    try:
+        return [json.loads(line) for line in (directory / "ordinary-client-events.jsonl").read_text(encoding="utf-8").splitlines() if line]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def client_exit_diagnostics(directory: Path, process: subprocess.Popen[bytes], reason: str, restart_window: bool) -> dict[str, Any]:
+    latest = ordinary_client_events(directory)[-1] if ordinary_client_events(directory) else {}
+    code = process.poll()
+    try: tail = (directory / "client.log").read_text(encoding="utf-8", errors="replace")[-1000:]
+    except OSError: tail = ""
+    tail = re.sub(r"(?i)(password|account|token|secret)\s*[=:]\s*\S+", r"\1=[redacted]", tail)
+    return {
+        "exitCode": code, "signal": -code if isinstance(code, int) and code < 0 else None,
+        "normalizedReason": reason, "connectedRuntimeSeconds": latest.get("connectedRuntimeSeconds", 0),
+        "pongCount": latest.get("pongCount", 0), "activityCount": latest.get("activityCount", 0),
+        "lastPongAgeSeconds": latest.get("lastPongAgeSeconds"), "lastActivityAgeSeconds": latest.get("lastActivityAgeSeconds"),
+        "connectedGeneration": latest.get("connectedGeneration", 0), "restartWindow": restart_window,
+        "stderrTail": tail,
+    }
+
+
 def lua_string(value: str) -> str:
     if "\n" in value or "\r" in value or "\0" in value:
         raise SoakError("configuration value contains a forbidden control character")
@@ -375,8 +398,11 @@ class DatabaseLifecycle:
                 fixture_id = 10001 + index
                 name = f"Soak Bot {index + 1}"
                 fixtures.append(f"INSERT INTO accounts (id,name,email,password) VALUES ({fixture_id},'soak_bot_{index + 1}','bot{index + 1}@test.invalid','');")
+                # The lifecycle soak is not a combat-survival test. Give only
+                # disposable managed fixtures enough health that random world
+                # encounters cannot create unrelated session churn.
                 fixtures.append("INSERT INTO players (id,name,account_id,group_id,vocation,town_id,health,healthmax,mana,manamax,cap,conditions,posx,posy,posz,deletion) "
-                                f"VALUES ({fixture_id},'{name}',{fixture_id},1,1,1,150,150,100,100,100000,X'',0,0,0,0);")
+                                f"VALUES ({fixture_id},'{name}',{fixture_id},1,1,1,1000000,1000000,100,100,100000,X'',0,0,0,0);")
             ordinary_password = hashlib.sha1(self.ordinary_password.encode("utf-8"), usedforsecurity=False).hexdigest()
             fixtures.append(f"INSERT INTO accounts (id,name,email,password) VALUES (20001,'ordinary_soak','ordinary@test.invalid','{ordinary_password}');")
             fixtures.append("INSERT INTO players (id,name,account_id,group_id,level,vocation,town_id,health,healthmax,mana,manamax,cap,conditions,posx,posy,posz,deletion) "
@@ -495,7 +521,9 @@ def main(argv: list[str] | None = None) -> int:
         "SOAK_GAME_PORT": str(ports["legacy860"]), "SOAK_ACCOUNT": "ordinary_soak",
         "SOAK_PASSWORD": ordinary_password, "SOAK_CHARACTER": "Ordinary Soak",
         "SOAK_TIMEOUT_SECONDS": "15", "SOAK_HEARTBEAT_SECONDS": "5",
+        "SOAK_ACTIVITY_SECONDS": env.get("SOAK_ACTIVITY_SECONDS", "300"),
         "SOAK_READY_FILE": str(directory / "ordinary-client-ready.txt"),
+        "SOAK_DIAGNOSTICS_FILE": str(directory / "ordinary-client-events.jsonl"),
     }
     client_environment.write_text("".join(f"{key}={value}\n" for key,value in client_values.items()), encoding="utf-8")
     client_environment.chmod(0o600)
@@ -511,6 +539,8 @@ def main(argv: list[str] | None = None) -> int:
     cleanup_complete = False
     lifecycle = ManagedLifecycleMonitor()
     invariant_failures: list[str] = []
+    client_generation = 0
+    unexpected_client_exits = 0
     try:
         (directory / "environment-redacted.json").write_text(json.dumps(redact(env), indent=2) + "\n", encoding="utf-8")
         commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
@@ -521,14 +551,20 @@ def main(argv: list[str] | None = None) -> int:
         (directory / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
         database.create()
         def start_client():
+            nonlocal client_generation
             if not env.get("SOAK_CLIENT_COMMAND"): return None
+            client_generation += 1
             ready = directory / "ordinary-client-ready.txt"; ready.unlink(missing_ok=True)
             client_log = (directory / "client.log").open("ab", buffering=0)
             process = subprocess.Popen(shlex.split(env["SOAK_CLIENT_COMMAND"]), cwd=runtime,
-                                       env={**os.environ, **env}, stdout=client_log, stderr=subprocess.STDOUT)
+                                       env={**os.environ, **env, "SOAK_CONNECTED_GENERATION": str(client_generation),
+                                            "SOAK_RESTART_WINDOW": "1" if client_generation > 1 else "0"},
+                                       stdout=client_log, stderr=subprocess.STDOUT)
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                if process.poll() is not None: raise SoakError("ordinary protocol client failed before placement")
+                if process.poll() is not None:
+                    run.event("ordinary_client_exit", **client_exit_diagnostics(directory, process, "failed_before_placement", False))
+                    raise SoakError("ordinary protocol client failed before placement")
                 if ready.exists() and ready.read_text(encoding="ascii").strip() == "ORDINARY_CLIENT_PLACED=YES": return process
                 time.sleep(.1)
             process.terminate(); process.wait(timeout=5)
@@ -542,7 +578,10 @@ def main(argv: list[str] | None = None) -> int:
             client = start_client()
             deadline = time.monotonic() + args.duration_seconds
             while time.monotonic() < deadline:
-                if client and client.poll() is not None: raise SoakError("ordinary protocol client terminated unexpectedly")
+                if client and client.poll() is not None:
+                    unexpected_client_exits += 1
+                    run.event("ordinary_client_exit", **client_exit_diagnostics(directory, client, "unexpected_disconnect", False))
+                    raise SoakError("ordinary protocol client terminated unexpectedly")
                 run.sample(writer); rss_file.flush()
                 current_failures = lifecycle.observe(directory)
                 if current_failures:
@@ -555,7 +594,10 @@ def main(argv: list[str] | None = None) -> int:
                 run.stop(); run.start(); client=start_client()
                 restart_deadline = time.monotonic() + max(120, args.bots * 8 + 60)
                 while time.monotonic() < restart_deadline:
-                    if client and client.poll() is not None: raise SoakError("ordinary protocol client failed to reconnect")
+                    if client and client.poll() is not None:
+                        unexpected_client_exits += 1
+                        run.event("ordinary_client_exit", **client_exit_diagnostics(directory, client, "restart_reconnect_failed", True))
+                        raise SoakError("ordinary protocol client failed to reconnect")
                     run.sample(writer); rss_file.flush()
                     current_failures = lifecycle.observe(directory, restart_window=True)
                     if current_failures:
@@ -606,6 +648,19 @@ def main(argv: list[str] | None = None) -> int:
         snapshots=[]
         try: snapshots=[json.loads(line) for line in (directory/"fleet-snapshots.jsonl").read_text().splitlines() if line]
         except (OSError,json.JSONDecodeError): pass
+        client_events = ordinary_client_events(directory)
+        client_activity_count = sum(1 for item in client_events if item.get("event") == "activity")
+        client_pong_count = sum(1 for item in client_events if item.get("event") == "pong")
+        client_max_runtime = max((float(item.get("connectedRuntimeSeconds", 0)) for item in client_events), default=0.0)
+        client_placements = sum(1 for item in client_events if item.get("event") == "placed")
+        latest_client = client_events[-1] if client_events else {}
+        duplicate_sessions = max((item.get("duplicateSessions", 0) for item in snapshots), default=0)
+        run.event("ordinary_client_summary", placements=client_placements, pongCount=client_pong_count,
+                  activityCount=client_activity_count, maxConnectedRuntimeSeconds=client_max_runtime,
+                  connectedPast1000Seconds=client_max_runtime > 1000, unexpectedExits=unexpected_client_exits,
+                  connectedGeneration=latest_client.get("connectedGeneration"),
+                  restartWindow=latest_client.get("restartWindow", False),
+                  lastReceivedPacketCategory=latest_client.get("lastReceivedPacketCategory"))
         summary = {"result": "FAIL" if run.failed else "PASS", "gitCommit": subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),
                    "executable":str(args.server.resolve()), "profile": args.profile, "durationSeconds":args.duration_seconds,
                    "configuredBots":args.bots, "humanParticipants":1 if env.get("SOAK_CLIENT_COMMAND") else 0,
@@ -620,7 +675,14 @@ def main(argv: list[str] | None = None) -> int:
                    "tickMaxUs":max((item["maxUs"] for item in tick_values),default=None), "productionSoak": False,
                    "managedPingTimeouts":lifecycle.managed_ping_timeouts,"unexpectedManagedLogouts":lifecycle.unexpected_logouts,
                    "unexpectedManagedLogins":lifecycle.unexpected_logins,"unscheduledSessionReplacements":lifecycle.unscheduled_replacements,
-                   "affectedManagedBots":sorted(lifecycle.affected),"invariantFailureCount":len(invariant_failures),
+                   "affectedManagedBots":sorted(lifecycle.affected),"duplicateSessions":duplicate_sessions,
+                   "invariantFailureCount":len(invariant_failures),
+                   "ordinaryClientPlacements":client_placements,"ordinaryPongCount":client_pong_count,
+                   "ordinaryActivityCount":client_activity_count,"ordinaryMaxConnectedRuntimeSeconds":client_max_runtime,
+                   "ordinaryConnectedPast1000Seconds":client_max_runtime > 1000,"unexpectedOrdinaryClientExits":unexpected_client_exits,
+                   "ordinaryLastPongTimestamp":latest_client.get("lastPongTimestamp"),"ordinaryLastActivityTimestamp":latest_client.get("lastActivityTimestamp"),
+                   "ordinaryLastReceivedPacketCategory":latest_client.get("lastReceivedPacketCategory"),
+                   "ordinaryReconnectGeneration":latest_client.get("connectedGeneration"),"ordinaryRestartWindow":latest_client.get("restartWindow",False),
                    "mode":"live_mixed" if env.get("SOAK_CLIENT_COMMAND") else "live_server_only",
                    "cleanup":"PASS" if cleanup_complete else "FAIL",
                    "releaseSoak": "NOT_RUN",

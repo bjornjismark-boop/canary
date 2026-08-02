@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
 import select
 import signal
@@ -22,6 +24,7 @@ RSA_Q = int("7630979195970404721891201847792002125535401292779123937207447574596
 RSA_N = RSA_P * RSA_Q
 RSA_E = 65537
 ASSET_SIGNATURES = (0x44363843, 0x53363843, 0x50363843)
+TURN_OPCODES = (0x6F, 0x70)
 
 
 class ClientError(RuntimeError):
@@ -49,7 +52,11 @@ class Config:
     character: str
     timeout: float = 15.0
     heartbeat: float = 5.0
+    activity: float = 300.0
     ready_file: Path | None = None
+    diagnostics_file: Path | None = None
+    connected_generation: int = 1
+    restart_window: bool = False
 
     @staticmethod
     def from_values(v: dict[str, str]) -> "Config":
@@ -59,11 +66,38 @@ class Config:
         try:
             login, game = int(v["SOAK_LOGIN_PORT"]), int(v["SOAK_GAME_PORT"])
             timeout, heartbeat = float(v.get("SOAK_TIMEOUT_SECONDS", "15")), float(v.get("SOAK_HEARTBEAT_SECONDS", "5"))
+            activity = float(v.get("SOAK_ACTIVITY_SECONDS", "300"))
+            generation = int(v.get("SOAK_CONNECTED_GENERATION", "1"))
         except ValueError as exc: raise ClientError("invalid client numeric configuration") from exc
-        if not (1 <= login <= 65535 and 1 <= game <= 65535 and .1 <= timeout <= 60 and .1 <= heartbeat <= 60):
+        if not all(math.isfinite(value) for value in (timeout, heartbeat, activity)):
+            raise ClientError("client timing configuration must be finite")
+        if not (1 <= login <= 65535 and 1 <= game <= 65535 and .1 <= timeout <= 60 and .1 <= heartbeat <= 60 and 1 <= activity <= 600 and 1 <= generation <= 100):
             raise ClientError("client endpoint or timeout outside bounds")
         ready = Path(v["SOAK_READY_FILE"]) if v.get("SOAK_READY_FILE") else None
-        return Config(v["SOAK_HOST"], login, game, v["SOAK_ACCOUNT"], v["SOAK_PASSWORD"], v["SOAK_CHARACTER"], timeout, heartbeat, ready)
+        diagnostics = Path(v["SOAK_DIAGNOSTICS_FILE"]) if v.get("SOAK_DIAGNOSTICS_FILE") else None
+        restart_window = v.get("SOAK_RESTART_WINDOW", "0") == "1"
+        return Config(v["SOAK_HOST"], login, game, v["SOAK_ACCOUNT"], v["SOAK_PASSWORD"], v["SOAK_CHARACTER"], timeout, heartbeat, activity, ready, diagnostics, generation, restart_window)
+
+
+@dataclass
+class ActivitySchedule:
+    next_heartbeat: float
+    next_activity: float
+    turn_index: int = 0
+
+    @staticmethod
+    def after_placement(now: float, config: Config) -> "ActivitySchedule":
+        return ActivitySchedule(now, now + config.activity)
+
+    def due(self, now: float, config: Config) -> list[tuple[str, int]]:
+        packets: list[tuple[str, int]] = []
+        if now >= self.next_heartbeat:
+            packets.append(("pong", 0x1E)); self.next_heartbeat = now + config.heartbeat
+        if now >= self.next_activity:
+            opcode = TURN_OPCODES[self.turn_index % len(TURN_OPCODES)]
+            packets.append(("activity", opcode)); self.turn_index += 1
+            self.next_activity = now + config.activity
+        return packets
 
 
 def string(value: str) -> bytes:
@@ -186,6 +220,31 @@ class Client:
     def __init__(self, config: Config):
         self.config = config; self.key = (0x11223344, 0x55667788, 0x10203040, 0x50607080)
         self.sock: socket.socket | None = None; self.stopping = False; self.placed = False
+        self.generation = config.connected_generation; self.placement_monotonic: float | None = None
+        self.pong_count = 0; self.activity_count = 0
+        self.last_pong: float | None = None; self.last_activity: float | None = None
+        self.last_received_category = "none"; self.restart_window = config.restart_window
+
+    def diagnostics(self, event: str, reason: str = "none") -> dict[str, object]:
+        now = time.monotonic()
+        return {
+            "event": event, "reason": reason, "placed": self.placed,
+            "placementTimestamp": self.placement_monotonic,
+            "connectedGeneration": self.generation,
+            "pongCount": self.pong_count, "activityCount": self.activity_count,
+            "lastPongTimestamp": self.last_pong, "lastActivityTimestamp": self.last_activity,
+            "lastReceivedPacketCategory": self.last_received_category,
+            "connectedRuntimeSeconds": max(0.0, now - self.placement_monotonic) if self.placement_monotonic is not None else 0.0,
+            "lastPongAgeSeconds": max(0.0, now - self.last_pong) if self.last_pong is not None else None,
+            "lastActivityAgeSeconds": max(0.0, now - self.last_activity) if self.last_activity is not None else None,
+            "reconnectState": "connected" if self.placed and not self.stopping else "stopping" if self.stopping else "disconnected",
+            "restartWindow": self.restart_window,
+        }
+
+    def emit_diagnostics(self, event: str, reason: str = "none") -> None:
+        if not self.config.diagnostics_file: return
+        with self.config.diagnostics_file.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(self.diagnostics(event, reason), sort_keys=True) + "\n")
 
     def connect(self) -> None:
         login_account(self.config, self.key)
@@ -203,7 +262,11 @@ class Client:
                 size = struct.unpack_from("<H", payload, 1)[0]
                 raise ClientError("game login failed: " + payload[3:3 + size].decode(errors="replace"))
             if payload and payload[0] == 0x0A:
-                self.placed = True; print("ORDINARY_CLIENT_PLACED=YES", flush=True); return
+                self.placed = True; self.placement_monotonic = time.monotonic()
+                self.last_received_category = "placement"
+                self.emit_diagnostics("placed")
+                self.restart_window = False
+                print("ORDINARY_CLIENT_PLACED=YES", flush=True); return
         raise ClientError("game placement timeout")
 
     def logout(self) -> None:
@@ -215,27 +278,42 @@ class Client:
         self.connect(); assert self.sock
         if self.config.ready_file:
             self.config.ready_file.write_text("ORDINARY_CLIENT_PLACED=YES\n", encoding="ascii")
-        next_heartbeat = time.monotonic()
+        schedule = ActivitySchedule.after_placement(time.monotonic(), self.config)
         while not self.stopping:
-            timeout = max(0.0, min(1.0, next_heartbeat - time.monotonic()))
+            timeout = max(0.0, min(1.0, schedule.next_heartbeat - time.monotonic(), schedule.next_activity - time.monotonic()))
             readable, _, _ = select.select([self.sock], [], [], timeout)
             if readable:
                 # Reading every server frame is sufficient for this fixture.
                 # Login/map payloads are opcode streams, so never scan arbitrary
                 # payload bytes as if each occurrence were a standalone ping.
-                decrypt_frame(recv_frame(self.sock), self.key)
-            if time.monotonic() >= next_heartbeat:
-                # Canary records legacy client 0x1E as the authoritative pong.
-                self.sock.sendall(encrypted_frame(b"\x1e", self.key)); next_heartbeat = time.monotonic() + self.config.heartbeat
-        self.logout(); return 0
+                payload = decrypt_frame(recv_frame(self.sock), self.key)
+                self.last_received_category = f"game_packet_{payload[0]:02x}" if payload else "empty_game_packet"
+            now = time.monotonic()
+            for kind, opcode in schedule.due(now, self.config):
+                self.sock.sendall(encrypted_frame(bytes((opcode,)), self.key))
+                if kind == "pong":
+                    self.pong_count += 1; self.last_pong = now
+                else:
+                    self.activity_count += 1; self.last_activity = now
+                self.emit_diagnostics(kind)
+        self.logout(); self.emit_diagnostics("exit", "controlled_shutdown"); return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(); parser.add_argument("--env-file", type=Path, required=True)
-    args = parser.parse_args(argv); client = Client(Config.from_values(load_env(args.env_file)))
+    args = parser.parse_args(argv); values = load_env(args.env_file)
+    if os.environ.get("SOAK_CONNECTED_GENERATION"):
+        values["SOAK_CONNECTED_GENERATION"] = os.environ["SOAK_CONNECTED_GENERATION"]
+    if os.environ.get("SOAK_RESTART_WINDOW"):
+        values["SOAK_RESTART_WINDOW"] = os.environ["SOAK_RESTART_WINDOW"]
+    client = Client(Config.from_values(values))
     def stop(_signal, _frame): client.stopping = True
     signal.signal(signal.SIGTERM, stop); signal.signal(signal.SIGINT, stop)
-    return client.run()
+    try:
+        return client.run()
+    except (ClientError, OSError, TimeoutError) as exc:
+        client.emit_diagnostics("exit", type(exc).__name__)
+        raise
 
 
 if __name__ == "__main__":
