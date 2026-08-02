@@ -153,3 +153,73 @@ tools/run-playerbots-live-soak.sh \
 
 Do not set `PRODUCTION_SOAK=YES`, `M9E_COMPLETE=YES`, or `M9_COMPLETE=YES`
 unless this qualifying run genuinely completes with its release criteria met.
+
+## Qualifying release soak — 2026-08-02
+
+The commit-bound release profile completed successfully from
+`7c31d6046a7226423628be8826f4a7d407d4fb0e`.
+
+Command parameters:
+
+- profile: `release`
+- duration: 7,200 seconds
+- configured PlayerBots: 20
+- ordinary protocol participants: at least one
+- controlled restarts: three
+- output:
+  `/home/playerbots/workspace/playerbots/logs/playerbots-soak/20260802-163858-2081679`
+
+Final results:
+
+- result: `PASS`
+- configured/peak managed population: 20/20
+- human participants: 1
+- peak ordinary players: 1
+- ordinary-client placements: 4
+- ordinary activities: 24
+- maximum ordinary connected runtime: 7,201.141 seconds
+- crossed 1,000-second idle boundary: yes
+- controlled restarts: 3/3 `PASS`
+- unexpected ordinary-client exits: 0
+- managed ping timeouts: 0
+- unexpected managed logouts/logins: 0/0
+- unscheduled session replacements: 0
+- duplicate sessions: 0
+- invariant evaluations/failures: 7,523/0
+- RSS KiB initial/peak/final:
+  1,417,340 / 1,430,860 / 1,429,480
+- dispatcher samples: 4,621,435
+- dispatcher p50/p95/p99/max:
+  50 / 100 / 250 / 323,754 microseconds
+- cleanup: `PASS`
+- private ordinary-client and database credential files: removed
+- remaining soak processes: none
+
+Final classification:
+
+- `productionSoak=True`
+- `releaseSoak=PASS`
+- `PRODUCTION_SOAK=YES`
+- `RELEASE_SOAK=PASS`
+
+Artifact hashes:
+
+- `SHA256SUMS`:
+  `e8af6c829db6d5331a2dc40dc49ed1b83e68dc2c630ccd816988b0aed0cc23a2`
+- `summary.json`:
+  `362e1bc059cbf386ae405797a055739ff84a1f32a757e4dab5112e52d1978de4`
+- `invariants.json`:
+  `863698ceab6d71958a4e59f9fe823ffd672e21b750292d845cfb8a7a5be92adb`
+
+`faults.json` is a reserved zero-byte artifact. The harness declares it in
+the artifact manifest but has no writer or fault-document schema. Its empty
+hash is covered by `SHA256SUMS`; it is not claimed as JSON fault evidence.
+Fault coverage is provided by the named unit and integration tests.
+
+The canonical gate passed with `BUILD_RC=0`, `UNIT_RC=0`,
+`INTEGRATION_RC=0`, and `DIFF_RC=0`. PlayerBot unit tests passed 677/677,
+integration tests passed 115/115, and PlayerBot tool tests passed 56/56.
+
+The formal Codex review did not complete and remains
+`INTERRUPTED_OR_NOT_RUN`. Therefore this evidence does not by itself set
+`M9E_COMPLETE=YES` or `M9_COMPLETE=YES`, and OPS1A remains gated.

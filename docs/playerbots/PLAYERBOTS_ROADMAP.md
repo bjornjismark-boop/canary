@@ -668,3 +668,57 @@ Köra flera säkra bots tillsammans med vanliga spelare under längre tid.
 - [ ] Vanliga player-flöden har regressionstäckning.
 - [ ] Dokumentation för drift, felsökning och konfiguration finns.
 - [ ] Slutlig read-only review hittar inga blockerande fel.
+
+### M9E qualifying release evidence — 2026-08-02
+
+The release-hardening branch completed its required commit-bound production
+soak from
+`7c31d6046a7226423628be8826f4a7d407d4fb0e`.
+
+Acceptance evidence:
+
+- release profile: 7,200 seconds
+- managed PlayerBots: configured/peak 20/20
+- ordinary protocol participant: present for more than 7,200 seconds
+- ordinary placements: 4
+- ordinary activities: 24
+- controlled restarts: 3/3 pass
+- invariant failures: 0 across 7,523 evaluations
+- managed lifecycle churn counters: all zero
+- duplicate sessions: 0
+- correlated Canary RSS and dispatcher samples: present
+- cleanup and credential removal: pass
+- final classification:
+  `PRODUCTION_SOAK=YES`, `RELEASE_SOAK=PASS`
+
+Evidence directory:
+
+`/home/playerbots/workspace/playerbots/logs/playerbots-soak/20260802-163858-2081679`
+
+Manifest SHA-256:
+
+`e8af6c829db6d5331a2dc40dc49ed1b83e68dc2c630ccd816988b0aed0cc23a2`
+
+The associated canonical report is archived at:
+
+`/home/playerbots/workspace/playerbots/logs/codex-reports/20260802-213822-playerbots-m9e-qualifying-release-soak.md`
+
+Canonical report SHA-256:
+
+`b6b3e86908c483fbfe0b2cee013ddeb6177ca05d0da587b832d198dd270491d2`
+
+The authoritative fault matrix is covered by PlayerBot unit and integration
+tests for database admission recovery, failed placement, failed save and
+removal, dispatcher pressure and hysteresis, admin timeout, authentication,
+rate limiting, duplicate sessions, callback lifetime, ordinary-player
+starvation, reconstruction and cleanup.
+
+The formal review remains `INTERRUPTED_OR_NOT_RUN`. Completion remains:
+
+- `M9E_COMPLETE=NO`
+- `M9_COMPLETE=NO`
+- `OPS1A_COMPLETE=NO`
+- `OPS1B_COMPLETE=NO`
+
+Only a genuinely completed formal review may remove the remaining M9
+closure gate.
